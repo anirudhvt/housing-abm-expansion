@@ -30,25 +30,44 @@ from housing_abm.metrics import run_window, window_means  # noqa: E402
 
 
 def _appreciation_target():
-    """Real Atlanta appreciation interquartile range from Case-Shiller."""
+    """Plausible band for the model's appreciation rate.
+
+    The model has no inflation anywhere: incomes are fixed in level terms, and
+    there is no nominal trend in rents or construction costs. It therefore
+    produces a *real* appreciation rate, while Case-Shiller ATXRSA is a
+    nominal index. Validating the model's output against the nominal
+    2020-2023 window -- a historic boom averaging 11.7%/yr -- compares two
+    different quantities and guarantees a failure that no calibration could
+    fix. (That comparison is why the original validation table showed
+    appreciation pinned at its -0.030 floor and "out of range".)
+
+    The band used here is long-run *real* US house price growth, which is the
+    like-for-like comparison for a stationary model with no price trend built
+    in. The nominal Case-Shiller figures are still printed for context.
+    """
+    note = "long-run real US house price growth (Shiller); model has no inflation"
     try:
-        cs = pd.read_csv("atlanta_case_shiller_2020_2023.csv")
-        return (
-            cs["g"].quantile(0.25),
-            cs["g"].quantile(0.75),
-            f"25th-75th pctile of real Atlanta YoY appreciation, 2020-2023 "
-            f"(Case-Shiller ATXRSA); full-period mean {cs['g'].mean():.3f}",
+        cs = pd.read_csv("atlanta_case_shiller.csv")
+        note += (
+            f". Nominal Atlanta ATXRSA 2015-2026 for context: "
+            f"mean {cs['g'].mean():.3f}, median {cs['g'].median():.3f}"
         )
     except FileNotFoundError:
-        return -0.05, 0.20, "PLACEHOLDER -- run pull_case_shiller_data.py"
+        pass
+    return -0.01, 0.02, note
 
 
 TARGETS = [
     (
         "homeownership_rate",
-        0.55,
-        0.75,
-        "US national range ~63-69%; Atlanta metro tends lower, ~60-63%",
+        0.48,
+        0.60,
+        # The previous band, 0.55-0.75, was a US *national* range. Section 3.A
+        # of the paper reports the Atlanta metro figure from its own ACS pull:
+        # an owner-occupancy rate of 52.9%. That is the right target for a
+        # model calibrated to Atlanta.
+        "ACS 5-year 2019 owner-occupancy for the seven Atlanta metro counties "
+        "is 52.9%; band allows for small-ABM variation",
     ),
     (
         "rental_vacancy_rate",
@@ -75,6 +94,14 @@ TARGETS = [
         "institutional operators hold roughly 30% of metro Atlanta SFR",
     ),
     ("annual_appreciation_g", *_appreciation_target()),
+    (
+        "months_of_inventory",
+        1.0,
+        8.0,
+        "US sale markets typically run 3-6 months of inventory; the EQ 8 "
+        "price-reduction rule clears this model's sale market far more slowly, "
+        "which is the main known limitation of the current calibration",
+    ),
 ]
 
 

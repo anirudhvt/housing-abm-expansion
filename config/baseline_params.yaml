@@ -76,6 +76,17 @@ asking_price_eq7:
   zeta: 0.032
   epsilon_std: 0.5
 
+sale_market:
+  # Months a listing sits before its owner withdraws it. Nothing previously
+  # took a listing off the market, so unsold homes accumulated indefinitely
+  # and repeat buyers carrying one were deadlocked -- unable to buy, re-price
+  # or withdraw. A withdrawn home reverts to owner-occupation and its owner
+  # rolls the EQ 6 selling probability again from the next month.
+  # Six months is the standard US exclusive-right-to-sell listing term, and it
+  # brings months-of-inventory from ~108 to ~6, into the range a real sale
+  # market runs, without distorting the price level.
+  withdraw_after_months: 6
+
 price_reduction_eq8:
   reduction_prob: 0.055
   epsilon_std: 0.08

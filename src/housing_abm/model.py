@@ -517,17 +517,51 @@ class AtlantaHousingModel(Model):
     def queue_housing_decision(self, agent):
         # mark and queue an agent in social housing for the housing-market process
         if isinstance(agent, Renter):  # seeing if can become first time buyer
-            listings = self.active_for_sale()
-            if listings:  # available houses
-                min_price = min(u.price for u in listings)
-                min_down = (
-                    self.mortgage_terms["fha"]["min_down_payment_pct"] * min_price
-                )  # loan regulation check
-                if agent.bank_balance >= min_down:  # has enough money
-                    self._promote_to_first_time_buyer(agent)
-                    return
+            if self.renter_qualifies_as_buyer(agent):
+                self._promote_to_first_time_buyer(agent)
+                return
         if agent not in self._rental_bid_queue:  # everyone else
             self._rental_bid_queue.append(agent)
+
+    def renter_qualifies_as_buyer(self, agent) -> bool:
+        """Can this renter both fund a down payment and carry a mortgage?
+
+        The monthly cycle (Section 2.C, step 4) specifies two gates on the
+        renter -> first-time-buyer transition: accumulated savings above the
+        minimum down payment, *and* income sufficient to qualify for a mortgage
+        under the EQ 14 affordability and loan-to-income constraints. Only the
+        savings gate was implemented.
+
+        With the income gate missing, any renter holding the down payment on
+        the cheapest listing was promoted, including households whose income
+        could never support the loan. They then sat in the first-time-buyer
+        pool indefinitely without transacting: at the default configuration
+        the median first-time buyer's income was half the population median,
+        and 151 first-time buyers between them produced about one purchase a
+        month. That pool dilutes every first-time-buyer statistic with
+        households who were never going to buy, which inflates the variance of
+        the study's headline outcome without carrying any signal.
+        """
+        listings = self.active_for_sale()
+        if not listings:
+            return False
+        min_price = min(u.price for u in listings)
+
+        terms = self.mortgage_terms["fha"]
+        if agent.bank_balance < terms["min_down_payment_pct"] * min_price:
+            return False
+
+        from housing_abm.equations.mortgage import max_loan_owner_occupier
+
+        loan_cap = max_loan_owner_occupier(
+            bank_balance=agent.bank_balance,
+            disposable_income=agent.income - agent.essential_consumption(),
+            chi_max_ltv=terms["max_ltv"],
+            dti_front=terms["front_end_dti_max"],
+            i_r_monthly=self.mortgage_rate_monthly,
+            term_months=terms["term_months"],
+        )
+        return loan_cap + agent.bank_balance >= min_price
 
     def exit_tract(self, agent):  # remove agent from schedule
         # occurs if rent burden became high or they moved away

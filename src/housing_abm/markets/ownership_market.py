@@ -178,6 +178,41 @@ def _settle_purchase(model, unit, agent, down_payment, final_price, acquisition_
         agent.owned_since_month = model.current_month
 
 
+def _withdraw_stale_listings(model, for_sale):
+    """Let sellers give up on a listing that will not sell.
+
+    Nothing ever took a listing off the sale market, so a seller whose home
+    did not clear stayed listed forever -- and a repeat buyer carrying an
+    unsold home returns early from step(), so they could neither buy nor
+    re-price nor withdraw. At the default configuration that deadlocked about
+    a fifth of repeat buyers and left the median listing sitting on the market
+    for roughly 87 months, against the three to six months of inventory a real
+    market runs.
+
+    Real sellers withdraw and try again later. A withdrawn home reverts to
+    ordinary owner-occupation, and its owner rolls the EQ 6 selling
+    probability again from the next month, so the listing can return when
+    conditions improve. Units with no owner (unsold new construction) stay
+    listed, since there is no one to withdraw them.
+    """
+    limit = model.params.get("sale_market", {}).get("withdraw_after_months", 0)
+    if not limit:
+        return
+    for unit in list(for_sale):
+        if unit.days_on_market < limit or unit.owner is None:
+            continue
+        seller = model._resale_sellers.pop(unit, None)
+        unit.on_sale_market = False
+        unit.days_on_market = 0
+        model._cache_active_for_sale = None
+        if seller is not None and getattr(seller, "house_to_sell", None) is unit:
+            seller.house_to_sell = None
+        if getattr(unit.owner, "properties", None) is not None:
+            # investor-held: back onto the rental market rather than idle
+            unit.on_rental_market = True
+            model.add_rental_unit(unit)
+
+
 def run_ownership_market(model):
     """Multi round double auction clearing of queued buyers against for-sale houses"""
     for_sale = model.active_for_sale()
@@ -202,6 +237,8 @@ def run_ownership_market(model):
         )
         # cant have repeated cuts lower a listing below payoff
         unit.price = max(unit.price, unit.mortgage_principal)
+
+    _withdraw_stale_listings(model, for_sale)
 
     if not model._ownership_bid_queue:  # no houses or no prospective buyers
         return

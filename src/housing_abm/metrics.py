@@ -38,6 +38,8 @@ SECONDARY_METRICS = (
     "median_price",
     "median_rent",
     "n_households",
+    "months_of_inventory",
+    "median_months_on_market",
 )
 
 # Metrics that are ratios of monthly counts.
@@ -98,6 +100,14 @@ def observe(model) -> dict:
     prices = [u.price for u in model.housing_units if u.price]
     rents = [u.rent for u in model.rental_units if u.rent]
 
+    # sale-market liquidity. A healthy US market runs 3-6 months of inventory;
+    # this model clears far more slowly, which is a known limitation of the
+    # EQ 8 price-reduction rule at this population size, so it is measured and
+    # reported rather than left implicit.
+    listings = model.active_for_sale()
+    sales = sum(model.purchases_this_month.values())
+    months_on_market = [u.days_on_market for u in listings]
+
     return {
         "homeownership_rate": model._homeownership_rate(),
         "rental_vacancy_rate": model._rental_vacancy_rate(),
@@ -122,6 +132,10 @@ def observe(model) -> dict:
         "median_price": float(np.median(prices)) if prices else None,
         "median_rent": float(np.median(rents)) if rents else None,
         "n_households": float(model.n_household_agents()),
+        "months_of_inventory": (len(listings) / sales) if sales else None,
+        "median_months_on_market": (
+            float(np.median(months_on_market)) if months_on_market else None
+        ),
     }
 
 
