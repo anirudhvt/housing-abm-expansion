@@ -366,3 +366,34 @@ Every effect is reported with:
 Purchases are also broken out by buyer class, so the incidence question -- who
 actually buys the homes a policy diverts from institutional investors -- is
 read directly from the data rather than inferred from the homeownership stock.
+
+
+---
+
+## 7. Robustness of the corrected findings
+
+`beta_institutional` is the shape parameter of the EQ 10/13 logistic -- the
+parameter that governs how far any policy can move investor behaviour, and the
+one the saturation bug lived in. It is also the parameter the paper itself
+identifies as most uncertain. Sweeping it across the paper's own range and
+re-running the full paired comparison at each value (15 seeds per cell):
+
+| policy | beta=10 | beta=25 | beta=50 | beta=75 | beta=100 |
+|---|---|---|---|---|---|
+| waiting period | -0.0206 * | -0.0205 * | -0.0220 * | -0.0258 * | -0.0175 * |
+| ownership cap (hard) | +0.0086 * | +0.0110 * | +0.0088 * | +0.0045 | +0.0108 * |
+| ownership cap (soft) | +0.0041 | +0.0000 | +0.0003 | -0.0015 | +0.0016 |
+| purchase tax | +0.0015 | -0.0002 | +0.0019 | -0.0001 | +0.0044 |
+| vacancy tax | +0.0040 | -0.0030 | -0.0039 | -0.0045 | +0.0010 |
+| portfolio tax | +0.0005 | -0.0012 | -0.0011 | -0.0061 * | +0.0011 |
+
+(effect on the homeownership rate; `*` = 95% interval excludes zero)
+
+The waiting period harms homeownership at every value, significantly. The hard
+cap helps at every value, significantly at four of five. The three financial
+penalties stay null throughout; the single portfolio-tax cell at beta=75 is one
+significant result in thirty uncorrected tests, which is what a 5% false
+positive rate looks like.
+
+The reversal of the paper's headline finding is therefore not an artefact of a
+parameter choice.
