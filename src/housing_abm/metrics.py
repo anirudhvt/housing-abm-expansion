@@ -35,13 +35,37 @@ SECONDARY_METRICS = (
     "mean_lti_owner_occupier",
     "institutional_share_of_rentals",
     "investor_share_of_stock",
-    "ftb_purchase_share",
     "median_price",
     "median_rent",
     "n_households",
 )
 
-ALL_METRICS = PRIMARY_METRICS + SECONDARY_METRICS
+# Metrics that are ratios of monthly counts.
+#
+# A handful of houses change hands each month, so the monthly first-time-buyer
+# share is a ratio of very small integers -- 0/2, 1/3, undefined -- and the
+# mean of those ratios is both extremely noisy and biased by the months with
+# few transactions. Aggregating numerator and denominator over the window
+# first gives the quantity actually of interest: the share of transactions in
+# the window won by first-time buyers.
+RATIO_METRICS = {
+    "ftb_purchase_share": ("n_purchases_ftb", "n_purchases_total"),
+    "repeat_buyer_purchase_share": ("n_purchases_repeat", "n_purchases_total"),
+    "investor_purchase_share": ("n_purchases_investor", "n_purchases_total"),
+    "institutional_purchase_share": ("n_purchases_institutional", "n_purchases_total"),
+    "small_landlord_purchase_share": ("n_purchases_small_landlord", "n_purchases_total"),
+}
+
+COUNT_METRICS = (
+    "n_purchases_ftb",
+    "n_purchases_repeat",
+    "n_purchases_investor",
+    "n_purchases_institutional",
+    "n_purchases_small_landlord",
+    "n_purchases_total",
+)
+
+ALL_METRICS = PRIMARY_METRICS + SECONDARY_METRICS + COUNT_METRICS
 
 
 def observe(model) -> dict:
@@ -84,7 +108,17 @@ def observe(model) -> dict:
             institutional_units / rental_stock if rental_stock else None
         ),
         "investor_share_of_stock": investor_units / stock if stock else None,
-        "ftb_purchase_share": model.ftb_purchase_share_this_month(),
+        "n_purchases_ftb": float(model.purchases_this_month["ftb"]),
+        "n_purchases_repeat": float(model.purchases_this_month["repeat"]),
+        "n_purchases_institutional": float(model.purchases_this_month["institutional"]),
+        "n_purchases_small_landlord": float(
+            model.purchases_this_month["small_landlord"]
+        ),
+        "n_purchases_investor": float(
+            model.purchases_this_month["small_landlord"]
+            + model.purchases_this_month["institutional"]
+        ),
+        "n_purchases_total": float(sum(model.purchases_this_month.values())),
         "median_price": float(np.median(prices)) if prices else None,
         "median_rent": float(np.median(rents)) if rents else None,
         "n_households": float(model.n_household_agents()),
@@ -103,12 +137,28 @@ def run_window(model, months: int) -> dict[str, list]:
 
 
 def window_means(series: dict[str, list]) -> dict[str, float | None]:
-    """Mean of each series over the window, ignoring months with no data."""
+    """Window summary: means for levels, pooled ratios for count ratios."""
     out: dict[str, float | None] = {}
     for name, values in series.items():
         clean = [v for v in values if v is not None and not np.isnan(v)]
         out[name] = float(np.mean(clean)) if clean else None
+
+    for name, (num_key, den_key) in RATIO_METRICS.items():
+        numerator = float(np.nansum(np.asarray(series[num_key], dtype=float)))
+        denominator = float(np.nansum(np.asarray(series[den_key], dtype=float)))
+        out[name] = numerator / denominator if denominator > 0 else None
     return out
+
+
+def ratio_series(series: dict[str, list], name: str) -> list:
+    """Expanding-window ratio, for diagnostics that need a time series."""
+    num_key, den_key = RATIO_METRICS[name]
+    num = np.nan_to_num(np.asarray(series[num_key], dtype=float))
+    den = np.nan_to_num(np.asarray(series[den_key], dtype=float))
+    cum_num, cum_den = np.cumsum(num), np.cumsum(den)
+    return [
+        float(n / d) if d > 0 else None for n, d in zip(cum_num, cum_den)
+    ]
 
 
 def effective_sample_size(values) -> float:

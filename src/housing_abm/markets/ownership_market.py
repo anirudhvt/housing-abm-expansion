@@ -9,9 +9,13 @@ from housing_abm.equations.market_matching import (
 )
 from housing_abm.equations.selling import price_reduction
 from housing_abm.policy import enforce_lti_policies
+from housing_abm.markets.offer_book import OfferBook
 from housing_abm.policies.investor_restrictions import (
-    passes_unit_level_policies,
+    agent_policy_tag,
+    eligible_units_for_tag,
     filter_ownership_cap_bids,
+    has_unit_level_policies,
+    passes_unit_level_policies,
 )
 
 
@@ -52,28 +56,61 @@ def _is_investor(agent) -> bool:
     return getattr(agent, "properties", None) is not None
 
 
-def _preferred_offer(bid, affordable_offers, model):
-    """Phase 1 matching: investors want expected rental yield,
-    everyone else wants highest quality"""
-    if _is_investor(bid["agent"]):
-
-        def yield_key(unit):
-            tract = model.tracts[unit.tract_id]
-            rent_estimate = (
-                unit.rent
-                if unit.rent is not None
-                else tract.rent_per_quality * unit.quality
-            )
-            return expected_gross_rental_yield(
-                rent_estimate, unit.price, tract.avg_days_on_market()
-            )
-
-        return pick_preferred(model.random_gen, affordable_offers, yield_key)
-    return pick_preferred(model.random_gen, affordable_offers, lambda unit: unit.quality)
-      # everyone else looks for quality
+def _quality_key(unit):
+    """Owner-occupiers want the best house they can afford."""
+    return unit.quality
 
 
-def _settle_purchase(model, unit, agent, down_payment, final_price):
+def _make_yield_key(model):
+    """Investors want the best expected gross rental yield (EQ 19/20).
+
+    avg_days_on_market is a tract-level quantity, so it is read once per round
+    rather than once per (bid, unit) pair.
+    """
+    dom = {tid: tract.avg_days_on_market() for tid, tract in model.tracts.items()}
+    rent_per_quality = {
+        tid: tract.rent_per_quality for tid, tract in model.tracts.items()
+    }
+
+    def yield_key(unit):
+        rent_estimate = (
+            unit.rent
+            if unit.rent is not None
+            else rent_per_quality[unit.tract_id] * unit.quality
+        )
+        return expected_gross_rental_yield(rent_estimate, unit.price, dom[unit.tract_id])
+
+    return yield_key
+
+
+def _build_offer_books(model, offers):
+    """One price-sorted book per (policy class, preference) combination.
+
+    Unit-level policies gate which listings a class may bid on, so each class
+    that faces a different gate needs its own book. With no such policy active
+    -- the baseline, and the tax scenarios -- households and investors share
+    the two books built from the full offer list.
+    """
+    rng = model.random_gen
+    yield_key = _make_yield_key(model)
+    if not has_unit_level_policies(model):
+        household_book = OfferBook(offers, _quality_key, rng)
+        investor_book = OfferBook(offers, yield_key, rng)
+        return {
+            None: household_book,
+            "small_landlord": investor_book,
+            "institutional": investor_book,
+        }
+
+    books = {None: OfferBook(offers, _quality_key, rng)}
+    for tag in ("small_landlord", "institutional"):
+        books[tag] = OfferBook(
+            eligible_units_for_tag(model, tag, offers), yield_key, rng
+        )
+    return books
+
+
+def _settle_purchase(model, unit, agent, down_payment, final_price, acquisition_tax=0.0):
     """finish one winnig bid, assign all characteristics"""
     unit.price = final_price  # bid up may have raised price
 
@@ -116,7 +153,8 @@ def _settle_purchase(model, unit, agent, down_payment, final_price):
     unit.owner = agent
     unit.on_sale_market = False
     unit.days_on_market = 0
-    agent.bank_balance -= down_payment
+    # the purchase tax leaves the buyer's balance but buys no equity
+    agent.bank_balance -= down_payment + acquisition_tax
     model.record_purchase(agent)
     if _is_investor(agent):
         # investor/landlord: accumulate, don't overwrite prior purchases
@@ -193,16 +231,16 @@ def run_ownership_market(model):
             break
 
         # Phase 1: every remaining bid chooses preferred affordable offer
+        books = _build_offer_books(model, remaining_offers)
         claims = {}  # offer -> list of bids
         for bid in remaining_bids:
-            affordable = [
-                u
-                for u in remaining_offers
-                if bid["max_price"] >= u.price and bid["agent"] is not u.owner and passes_unit_level_policies(model, bid["agent"], u)
-            ]
-            if not affordable:
+            agent = bid["agent"]
+            tag = agent_policy_tag(agent) if _is_investor(agent) else None
+            best_offer = books[tag].best_affordable(
+                bid["max_price"], exclude_owner=agent
+            )
+            if best_offer is None:
                 continue  # can't afford anything left this round
-            best_offer = _preferred_offer(bid, affordable, model)
             claims.setdefault(best_offer, []).append(bid)
 
         if not claims:
@@ -233,7 +271,14 @@ def run_ownership_market(model):
                 final_price = bid_up_price
 
             agent, down_payment = winning_bid["agent"], winning_bid["down_payment"]
-            _settle_purchase(model, unit, agent, down_payment, final_price)
+            _settle_purchase(
+                model,
+                unit,
+                agent,
+                down_payment,
+                final_price,
+                acquisition_tax=winning_bid.get("acquisition_tax", 0.0),
+            )
             matched_bids.append(winning_bid)
             sold_offers.append(unit)
 

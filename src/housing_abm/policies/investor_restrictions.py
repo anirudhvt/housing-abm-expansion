@@ -75,6 +75,52 @@ def _policies_of_type(model, policy_type: str) -> list[dict]:
 # waiting_period + geographic_restriction, checked during run_ownership_market
 # ---------------------------------------------------------------------------
 
+def has_unit_level_policies(model) -> bool:
+    """True if any policy restricts which units an agent may bid on."""
+    return bool(
+        _policies_of_type(model, "waiting_period")
+        or _policies_of_type(model, "geographic_restriction")
+    )
+
+
+def eligible_units_for_tag(model, tag, units):
+    """Units an agent carrying `tag` may bid on, under unit-level policies.
+
+    The waiting-period and geographic restrictions depend only on the agent's
+    class and the unit, never on the individual agent, so eligibility can be
+    resolved once per class per round instead of once per (bid, unit) pair.
+    In the hot matching loop that difference was tens of millions of predicate
+    evaluations per run.
+    """
+    DAYS = DAYS_PER_MODEL_STEP
+    thresholds = [
+        p["days"] / DAYS
+        for p in _policies_of_type(model, "waiting_period")
+        if tag is not None and tag in p.get("applies_to", ["small_landlord", "institutional"])
+    ]
+    restricted = set()
+    for p in _policies_of_type(model, "geographic_restriction"):
+        if tag is not None and tag in p.get(
+            "applies_to", ["small_landlord", "institutional"]
+        ):
+            restricted.update(p.get("restricted_tracts", []))
+
+    if not thresholds and not restricted:
+        return units
+    min_days = max(thresholds) if thresholds else None
+    return [
+        u
+        for u in units
+        if (min_days is None or u.days_on_market >= min_days)
+        and u.tract_id not in restricted
+    ]
+
+
+def agent_policy_tag(agent):
+    """Public accessor for an agent's policy class tag."""
+    return _agent_tag(agent)
+
+
 def passes_unit_level_policies(model, agent, unit) -> bool:
     """call this alongside the existing max_price/ownership check when
     building each bid's `affordable` list in run_ownership_market.
@@ -213,14 +259,18 @@ def _portfolio_tax_rate(brackets: list[dict], n_units: int) -> float:
 
 
 def compute_policy_cost(model, agent) -> float:
-    """Total policy-driven cost  on this agent's expected/effective yield
-    this month
+    """Recurring policy cost on this agent's yield, as an annual rate.
+
+    Only *holding* costs belong here. The purchase tax used to be included,
+    which meant it was subtracted from EQ 12 as well as EQ 9 -- that is, a tax
+    on acquiring a home also reduced the effective yield on homes the investor
+    already owned, and so raised their probability of selling. The scenario
+    therefore made investors churn their portfolios rather than deterring
+    acquisition, and investor purchases went *up* under the tax. A purchase
+    tax is a one-off transaction cost at acquisition; it is applied in
+    acquisition_price_multiplier below, where it belongs.
     """
     total = 0.0
-
-    for policy in _policies_of_type(model, "purchase_tax"):
-        if _applies(policy, agent):
-            total += policy["rate"]
 
     for policy in _policies_of_type(model, "vacancy_tax"):
         if not _applies(policy, agent):
@@ -246,3 +296,20 @@ def compute_policy_cost(model, agent) -> float:
             total += _portfolio_tax_rate(policy["brackets"], len(agent.properties))
 
     return total
+
+
+def acquisition_price_multiplier(model, agent) -> float:
+    """Factor by which a purchase tax raises an investor's cash outlay.
+
+    The paper specifies this policy as "the effective purchase price for
+    investors is increased by the tax rate, reducing the expected yield on
+    potential acquisitions". The return still accrues on the asset's market
+    value, but the investor has to put up (1 + rate) times the cash, so the
+    tax enters EQ 9 by inflating the down payment rather than as a flat
+    subtraction from the yield.
+    """
+    multiplier = 1.0
+    for policy in _policies_of_type(model, "purchase_tax"):
+        if _applies(policy, agent):
+            multiplier += policy["rate"]
+    return multiplier

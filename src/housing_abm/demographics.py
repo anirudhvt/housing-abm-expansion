@@ -102,7 +102,13 @@ def process_aging_and_births(model):
     age_lo, age_hi = cfg["new_household_age_range"]
     for _ in range(n_births + n_replacements):
         age = int(model.rng_demography.integers(age_lo, age_hi))
-        income = float(model.rng_demography.lognormal(mean=8.9, sigma=0.55))
+        income_cfg = model.params.get("income_distribution", {})
+        income = float(
+            model.rng_demography.lognormal(
+                mean=income_cfg.get("household_lognormal_mean", 8.6),
+                sigma=income_cfg.get("household_lognormal_sigma", 0.65),
+            )
+        )
         Renter(model=model, income=income, age=age, tract_id="tract_001")
 
 

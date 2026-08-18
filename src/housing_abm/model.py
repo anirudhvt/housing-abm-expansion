@@ -209,10 +209,14 @@ class AtlantaHousingModel(Model):
         initial_ages = sample_stationary_ages(
             self.random_gen, n_households, demo_cfg["mortality"], entry_lo, entry_hi
         )
+        income_cfg = self.params.get("income_distribution", {})
         for age in initial_ages:
             income = float(
-                self.random_gen.lognormal(mean=8.6, sigma=0.65)
-            )  # realistic terms - average ~$2,980 per month
+                self.random_gen.lognormal(
+                    mean=income_cfg.get("household_lognormal_mean", 8.6),
+                    sigma=income_cfg.get("household_lognormal_sigma", 0.65),
+                )
+            )
             Renter(
                 model=self, income=income, age=int(age), tract_id="tract_001"
             )  # default initialization
@@ -225,7 +229,10 @@ class AtlantaHousingModel(Model):
         )
         for _ in range(n_small_landlords):
             income = float(
-                self.random_gen.lognormal(mean=9.8, sigma=0.5)
+                self.random_gen.lognormal(
+                    mean=income_cfg.get("small_landlord_lognormal_mean", 9.8),
+                    sigma=income_cfg.get("small_landlord_lognormal_sigma", 0.5),
+                )
             )  # landlords skew higher-income than renters
             age = int(self.random_gen.integers(30, 70))
             landlord = SmallLandlord(
@@ -541,10 +548,23 @@ class AtlantaHousingModel(Model):
         self.queue_housing_decision(agent)
 
     def queue_ownership_bid(
-        self, agent, max_price: float, down_payment: float
+        self, agent, max_price: float, down_payment: float, acquisition_tax: float = 0.0
     ):  # creates a bid
+        """Register a bid.
+
+        acquisition_tax is cash the buyer must hand over on top of the down
+        payment (a purchase tax). It is tracked separately because it is not
+        equity in the house: folding it into down_payment would shrink the
+        mortgage principal, so the tax would silently reduce the buyer's
+        borrowing instead of costing them anything.
+        """
         self._ownership_bid_queue.append(
-            {"agent": agent, "max_price": max_price, "down_payment": down_payment}
+            {
+                "agent": agent,
+                "max_price": max_price,
+                "down_payment": down_payment,
+                "acquisition_tax": acquisition_tax,
+            }
         )
 
     def queue_listing(self, unit, seller):  # queues a house for sale
@@ -624,17 +644,6 @@ class AtlantaHousingModel(Model):
         }.get(getattr(agent, "WEALTH_KEY", None))
         if key is not None:
             self.purchases_this_month[key] += 1
-
-    def ftb_purchase_share_this_month(self):
-        """First-time buyers as a share of all completed purchases.
-
-        This is the quantity every one of the six policies acts on most
-        directly -- who wins the bidding on a given listing -- so it responds
-        to a policy far sooner and far more sharply than the homeownership
-        stock, which only moves as fast as the flow accumulates.
-        """
-        total = sum(self.purchases_this_month.values())
-        return self.purchases_this_month["ftb"] / total if total else None
 
     def register_unit(self, unit):
         """Track a unit in the authoritative housing stock.

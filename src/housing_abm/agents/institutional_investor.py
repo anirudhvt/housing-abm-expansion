@@ -11,7 +11,10 @@ from housing_abm.equations.investor_yield import (
 from housing_abm.equations.mortgage import down_payment_investor, passes_investor_dscr
 from housing_abm.equations.rental_pricing import institutional_rent
 from housing_abm.equations.selling import asking_price
-from housing_abm.policies.investor_restrictions import compute_policy_cost
+from housing_abm.policies.investor_restrictions import (
+    acquisition_price_multiplier,
+    compute_policy_cost,
+)
 
 from .base import HouseholdAgent
 
@@ -162,9 +165,14 @@ class InstitutionalInvestor(HouseholdAgent):
             d_minimum_pct=down_cfg["d_minimum_pct"],
             rng=self.model.random_gen,
         )
-        if self.available_capital < down_payment:
-            return
         down_payment = min(down_payment, target_price)
+        # a purchase tax raises the cash the investor must put up for the same
+        # asset, which lowers EQ 9 leverage; the return still accrues on the
+        # market value, not the taxed price
+        tax_multiplier = acquisition_price_multiplier(self.model, self)
+        cash_outlay = down_payment + (tax_multiplier - 1.0) * target_price
+        if self.available_capital < cash_outlay:
+            return
 
         proposed_loan = 0.0 if is_cash else target_price - down_payment
         monthly_mortgage = (
@@ -189,17 +197,20 @@ class InstitutionalInvestor(HouseholdAgent):
 
         omega = expected_yield_buy(
             price=target_price,
-            down_payment=down_payment,
+            down_payment=cash_outlay,
             delta=self.DELTA,
             g=g,
             kappa=yield_cfg["kappa"],
             r_bar=tract.gross_rental_yield(),
             monthly_mortgage=monthly_mortgage,
-            policy_cost=compute_policy_cost(self.model, self)
+            policy_cost=compute_policy_cost(self.model, self),
         )
         prob_buy = p_buy_investor(omega, beta=prob_cfg["beta_institutional"])
 
         if self.model.random_gen.random() < prob_buy:
             self.model.queue_ownership_bid(
-                self, max_price=target_price, down_payment=down_payment
+                self,
+                max_price=target_price,
+                down_payment=down_payment,
+                acquisition_tax=cash_outlay - down_payment,
             )

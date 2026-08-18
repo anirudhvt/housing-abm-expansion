@@ -27,13 +27,13 @@ from housing_abm.experiment import (  # noqa: E402
     seeds_needed_for,
 )
 from housing_abm.metrics import (  # noqa: E402
-    ALL_METRICS,
     PRIMARY_METRICS,
     effective_sample_size,
 )
 
 REPORTED = list(PRIMARY_METRICS) + [
     "ftb_purchase_share",
+    "investor_purchase_share",
     "institutional_share_of_rentals",
     "median_price",
     "median_rent",
@@ -45,9 +45,7 @@ def _one_seed(args):
     baseline, policy, b_series, p_series = run_paired_seed(
         seed, households, spinup, months, policy_paths, config_path
     )
-    n_eff = {
-        m: effective_sample_size(b_series[m]) for m in PRIMARY_METRICS
-    }
+    n_eff = {m: effective_sample_size(b_series[m]) for m in PRIMARY_METRICS}
     return seed, baseline, policy, n_eff
 
 

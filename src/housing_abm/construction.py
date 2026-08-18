@@ -37,7 +37,13 @@ def run_investor_replenishment(model):
     n_small_landlords = sum(1 for a in model.agents if isinstance(a, SmallLandlord))
     target_small_landlords = round(n_households * sim_cfg.get("small_landlord_fraction", 0.0))
     for _ in range(target_small_landlords - n_small_landlords): #fill in gap with normal landlords
-        income = float(model.random_gen.lognormal(mean=9.8, sigma=0.5))
+        income_cfg = model.params.get("income_distribution", {})
+        income = float(
+            model.random_gen.lognormal(
+                mean=income_cfg.get("small_landlord_lognormal_mean", 9.8),
+                sigma=income_cfg.get("small_landlord_lognormal_sigma", 0.5),
+            )
+        )
         age = int(model.random_gen.integers(30, 70))
         landlord = SmallLandlord(model=model, income=income, age=age, tract_id="tract_001")
         landlord.bank_balance = float(model.random_gen.lognormal(mean=11.5, sigma=0.6))

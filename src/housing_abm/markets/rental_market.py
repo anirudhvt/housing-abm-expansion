@@ -5,7 +5,8 @@ from housing_abm.equations.rental_pricing import (
     sample_lease_length,
     small_landlord_rent,
 )
-from housing_abm.equations.market_matching import sample_bid_up_multiplier, max_rounds, pick_preferred
+from housing_abm.equations.market_matching import sample_bid_up_multiplier, max_rounds
+from housing_abm.markets.offer_book import OfferBook
 
 
 def generate_placeholder_rental_stock(
@@ -111,14 +112,20 @@ def run_rental_market(model):
         if not remaining_agents or not remaining_units:  # bidders or houses ran out
             break
 
-        # phase 1: remaining renters claim best quality unit they can afford
+        # phase 1: remaining renters claim best quality unit they can afford.
+        # Rent-sorted book with a prefix argmax over quality, so each renter
+        # costs O(log n) instead of a scan over every vacant unit -- see
+        # housing_abm.markets.offer_book.
+        book = OfferBook(
+            remaining_units, lambda u: u.quality, model.random_gen, price_attr="rent"
+        )
         claims = {}  # unit -> list of agents
         for agent in remaining_agents:
-            already_tried = rejected.get(agent, set())
-            affordable = [u for u in remaining_units if bids[agent] >= u.rent and u not in already_tried]
-            if not affordable:  # nothing on the market is cheap enough
+            best_unit = book.best_affordable(
+                bids[agent], excluded=rejected.get(agent)
+            )
+            if best_unit is None:  # nothing on the market is cheap enough
                 continue
-            best_unit = pick_preferred(model.random_gen, affordable, lambda u: u.quality)
             claims.setdefault(best_unit, []).append(agent)
 
         if not claims:

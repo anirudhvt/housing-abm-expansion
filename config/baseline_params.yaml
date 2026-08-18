@@ -175,6 +175,19 @@ repeat_buyer_promotion:
   min_tenure_months: 12 #PLACEHOLDER
 
 
+income_distribution:
+  # One lognormal for the household population, used for both the initial
+  # cohort and every later entrant. Previously the initial cohort was drawn
+  # from lognormal(8.6, 0.65) (median ~$5,430/mo, matching the ACS metro
+  # Atlanta median) while entrants came from lognormal(8.9, 0.55)
+  # (median ~$7,330/mo). As the initial cohort was replaced the population
+  # drifted steadily richer, and homeownership drifted up with it -- a trend
+  # in every reported outcome that had nothing to do with any policy.
+  household_lognormal_mean: 8.6
+  household_lognormal_sigma: 0.65
+  small_landlord_lognormal_mean: 9.8
+  small_landlord_lognormal_sigma: 0.5
+
 household_budget:
   #netted out before considering disposable income
   essential_consumption_monthly: 1215 #estimated from 2026 poverty line

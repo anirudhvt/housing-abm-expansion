@@ -1,56 +1,66 @@
-"""Loose reproduction of the paper's Section 5 validation approach
+"""Baseline validation against Atlanta plausibility targets.
+
+Two changes from the original version matter for interpreting the numbers.
+
+First, validation now runs under the *same* spin-up and window as the policy
+experiments and averages over the window. The original script ran a single
+seed with no spin-up at all and read the final month, while the policy runs
+used a 600-month spin-up: the validation table therefore described a different
+model state than the one the policy results came from, which is why the
+reported homeownership rate (0.52) bore no relation to what the policy runs
+actually produced (~0.24).
+
+Second, it runs multiple seeds and reports an interval, so "in range" is a
+claim about the model rather than about one draw.
 """
 
 import argparse
+import os
 import sys
-import pandas as pd
-sys.path.insert(0, "src")
+from concurrent.futures import ProcessPoolExecutor
 
-from housing_abm.model import AtlantaHousingModel
-from housing_abm.agents.repeat_buyer import RepeatBuyer
-from housing_abm.agents.first_time_buyer import FirstTimeBuyer
+import numpy as np
+import pandas as pd
+from scipy import stats
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+from housing_abm.experiment import build_and_spinup  # noqa: E402
+from housing_abm.metrics import run_window, window_means  # noqa: E402
+
 
 def _appreciation_target():
-    """Real Atlanta appreciation interquartile range from 
-    atlanta_case_shiller_2020_2023.csv
-    Falls back to placeholder if pull not run yet"""
+    """Real Atlanta appreciation interquartile range from Case-Shiller."""
     try:
         cs = pd.read_csv("atlanta_case_shiller_2020_2023.csv")
-        low = cs["g"].quantile(0.25)
-        high = cs["g"].quantile(0.75)
-        note = (
-            f"25th-75th pctile of real Atlanta YoY appreciation, "
-            f"2020-2023 (Case-Shiller ATXRSA); full-period mean was "
-            f"{cs['g'].mean():.3f}"
-        )
-        return low, high, note
-    except FileNotFoundError:
         return (
-            -0.05,
-            0.20,
-            "PLACEHOLDER band -- run pull_case_shiller_data.py to replace "
-            "with real Atlanta 2020-2023 appreciation",
+            cs["g"].quantile(0.25),
+            cs["g"].quantile(0.75),
+            f"25th-75th pctile of real Atlanta YoY appreciation, 2020-2023 "
+            f"(Case-Shiller ATXRSA); full-period mean {cs['g'].mean():.3f}",
         )
+    except FileNotFoundError:
+        return -0.05, 0.20, "PLACEHOLDER -- run pull_case_shiller_data.py"
 
-# (label, low, high, note)
+
 TARGETS = [
     (
         "homeownership_rate",
         0.55,
         0.75,
-        "US national range is ~63-69%; Atlanta metro tends lower, ~60-63%",
+        "US national range ~63-69%; Atlanta metro tends lower, ~60-63%",
     ),
     (
         "rental_vacancy_rate",
         0.05,
         0.15,
-        "US national rental vacancy is typically 5-8%; wider band for a small ABM",
+        "ACS metro Atlanta rental vacancy 7.3%; wider band for a small ABM",
     ),
     (
         "mean_ltv_owner_occupier",
         0.60,
         0.95,
-        "typical LTV at origination across FHA (up to 96.5%) and conventional (up to 80%)",
+        "origination LTV across FHA (up to 96.5%) and conventional (up to 80%)",
     ),
     (
         "mean_lti_owner_occupier",
@@ -58,73 +68,73 @@ TARGETS = [
         5.0,
         "typical loan-to-income multiples for US mortgages",
     ),
-    ("annual_appreciation_g", *_appreciation_target())
+    (
+        "institutional_share_of_rentals",
+        0.20,
+        0.40,
+        "institutional operators hold roughly 30% of metro Atlanta SFR",
+    ),
+    ("annual_appreciation_g", *_appreciation_target()),
 ]
 
 
-def compute_snapshot(model):
-    owners_with_mortgage = [
-        a
-        for a in model.agents
-        if isinstance(a, (RepeatBuyer, FirstTimeBuyer))
-        and a.house is not None
-        and a.house.mortgage_principal > 0
-    ]
-
-    ltvs, ltis = [], []
-    for a in owners_with_mortgage:
-        price = a.house.mortgage_principal + (
-            a.house.price - a.house.mortgage_principal
-        )  # == a.house.price at purchase-adjacent state; use current price as proxy
-        price = a.house.price if a.house.price else None
-        if price and price > 0:
-            ltvs.append(a.house.mortgage_principal / price)
-        annual_income = a.income * 12
-        if annual_income > 0:
-            ltis.append(a.house.mortgage_principal / annual_income)
-
-    return {
-        "homeownership_rate": model._homeownership_rate(),
-        "rental_vacancy_rate": model._rental_vacancy_rate(),
-        "mean_ltv_owner_occupier": sum(ltvs) / len(ltvs) if ltvs else None,
-        "mean_lti_owner_occupier": sum(ltis) / len(ltis) if ltis else None,
-        "annual_appreciation_g": model._appreciation_g()
-    }
+def _one(job):
+    seed, households, spinup, months, config = job
+    model = build_and_spinup(seed, households, spinup, config)
+    return window_means(run_window(model, months))
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--months", type=int, default=150)
     parser.add_argument("--households", type=int, default=300)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--spinup", type=int, default=120)
+    parser.add_argument("--months", type=int, default=180)
+    parser.add_argument("--seeds", type=int, default=12)
+    parser.add_argument("--config", type=str, default="config/baseline_params.yaml")
+    parser.add_argument("--workers", type=int, default=os.cpu_count() or 1)
     args = parser.parse_args()
 
-    model = AtlantaHousingModel(n_households=args.households, seed=args.seed)
-    for _ in range(args.months):
-        model.step()
-
-    snapshot = compute_snapshot(model)
+    jobs = [
+        (s, args.households, args.spinup, args.months, args.config)
+        for s in range(args.seeds)
+    ]
+    with ProcessPoolExecutor(max_workers=args.workers) as pool:
+        rows = list(pool.map(_one, jobs))
+    df = pd.DataFrame(rows)
 
     print(
-        f"Validation against plausible ranges (n={args.households}, {args.months} months, seed={args.seed})\n"
+        f"Baseline validation -- {args.households} households, "
+        f"{args.spinup}mo spin-up, {args.months}mo window averaged, "
+        f"{args.seeds} seeds\n"
     )
-    print(f"{'metric':<28} {'value':>10} {'target range':>16}   status")
-    print("-" * 78)
+    print(f"{'metric':<32} {'mean':>8} {'95% CI':>20} {'target':>16}   status")
+    print("-" * 96)
+    n_out = 0
     for label, low, high, note in TARGETS:
-        value = snapshot[label]
-        if value is None:
-            print(
-                f"{label:<28} {'n/a':>10} {f'[{low}, {high}]':>16}   NO DATA - {note}"
-            )
+        vals = df[label].dropna()
+        if vals.empty:
+            print(f"{label:<32} {'n/a':>8} {'':>20} {f'[{low}, {high}]':>16}   NO DATA")
             continue
-        in_range = low <= value <= high
-        status = "OK" if in_range else "OUT OF RANGE"
-        print(f"{label:<28} {value:>10.3f} {f'[{low}, {high}]':>16}   {status}")
+        mean = vals.mean()
+        se = vals.std(ddof=1) / np.sqrt(len(vals))
+        crit = stats.t.ppf(0.975, len(vals) - 1)
+        lo, hi = mean - crit * se, mean + crit * se
+        in_range = low <= mean <= high
+        overlaps = not (hi < low or lo > high)
+        status = "OK" if in_range else ("marginal" if overlaps else "OUT OF RANGE")
+        n_out += 0 if in_range else 1
+        ci = f"[{lo:.3f}, {hi:.3f}]"
+        print(
+            f"{label:<32} {mean:8.3f} {ci:>20} {f'[{low}, {high}]':>16}   {status}"
+        )
         if not in_range:
-            print(f"{'':<28} note: {note}")
+            print(f"{'':<32} note: {note}")
 
-    print("\nReminder: target ranges are generic US plausibility bands, not")
-    print("Atlanta-specific targets - replace with real ACS/HMDA figures once sourced.")
+    print(f"\n{len(TARGETS) - n_out}/{len(TARGETS)} targets met.")
+    print(
+        "Spin-up and window match the policy experiments, so these numbers "
+        "describe\nthe same model state the policy effects are measured in."
+    )
 
 
 if __name__ == "__main__":

@@ -11,7 +11,10 @@ from housing_abm.equations.mortgage import down_payment_investor, passes_investo
 from housing_abm.equations.rental_pricing import small_landlord_rent
 from housing_abm.equations.selling import asking_price
 
-from housing_abm.policies.investor_restrictions import compute_policy_cost
+from housing_abm.policies.investor_restrictions import (
+    acquisition_price_multiplier,
+    compute_policy_cost,
+)
 
 from .base import HouseholdAgent
 
@@ -149,9 +152,13 @@ class SmallLandlord(HouseholdAgent):
             )
         )
 
-        if self.bank_balance < down_payment:
-            return  # can't afford to purchase this month
         down_payment = min(down_payment, target_price)  # can't pay more than the price
+        # a purchase tax raises the cash required for the same asset (see
+        # acquisition_price_multiplier); the return still accrues on market value
+        tax_multiplier = acquisition_price_multiplier(self.model, self)
+        cash_outlay = down_payment + (tax_multiplier - 1.0) * target_price
+        if self.bank_balance < cash_outlay:
+            return  # can't afford to purchase this month
 
         # evaluate if they can get the loan
         proposed_loan = 0.0 if is_cash else target_price - down_payment
@@ -177,7 +184,7 @@ class SmallLandlord(HouseholdAgent):
 
         omega = expected_yield_buy(
             price=target_price,
-            down_payment=down_payment,
+            down_payment=cash_outlay,
             delta=self.DELTA,
             g=g,
             kappa=yield_cfg["kappa"],
@@ -192,5 +199,8 @@ class SmallLandlord(HouseholdAgent):
             self.model.random_gen.random() < prob_buy
         ):  # chooses to buy, bid on ownership market
             self.model.queue_ownership_bid(
-                self, max_price=target_price, down_payment=down_payment
+                self,
+                max_price=target_price,
+                down_payment=down_payment,
+                acquisition_tax=cash_outlay - down_payment,
             )
