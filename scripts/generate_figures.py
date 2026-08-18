@@ -169,35 +169,47 @@ def make_figure4(summary: pd.DataFrame, output_dir: str):
     # Zero line
     ax.axvline(0, color="#333333", linewidth=0.9, linestyle="--", zorder=2)
 
-    # Value labels on each bar
+    # Value labels, placed clear of the error bar rather than at the bar end,
+    # and scaled to the data range so they do not collide as effect sizes change
+    pad = 0.02 * (hr["ci_upper"].max() - hr["ci_lower"].min())
     for i, row in hr.iterrows():
-        val = row['mean_diff']
-        x_offset = 0.001 if val >= 0 else -0.001
-        ha = "left" if val >= 0 else "right"
+        val = row["mean_diff"]
+        anchor = row["ci_upper"] if val >= 0 else row["ci_lower"]
         ax.text(
-            val + x_offset, i,
+            anchor + (pad if val >= 0 else -pad),
+            i,
             f"{val:+.3f}",
-            va="center", ha=ha, fontsize=8.5, color="#222222"
-    )
+            va="center",
+            ha="left" if val >= 0 else "right",
+            fontsize=8.5,
+            color="#222222",
+        )
 
     # Axes
     ax.set_yticks(y_pos)
     ax.set_yticklabels(hr["policy"], fontsize=10)
-    ax.set_xlabel("Mean Change in Homeownership Rate vs. Baseline",
-                  fontsize=10)
-    ax.set_title("Figure 2: Policy Effects on First-Time Homeownership Rate",
+    ax.set_xlabel(
+        "Mean paired change in homeownership rate vs. baseline (95% CI)",
+        fontsize=10,
+    )
+    ax.set_title("Policy Effects on the Homeownership Rate",
                  fontsize=11, fontweight="bold", pad=12)
 
     # Legend
     blue_patch  = mpatches.Patch(color="#2E75B6", alpha=0.85, label="Access restriction")
     orange_patch = mpatches.Patch(color="#C55A11", alpha=0.85, label="Financial penalty")
-    #ax.legend(handles=[blue_patch, orange_patch], fontsize=9,
-    #         loc="lower right", framealpha=0.9)
+    ax.legend(
+        handles=[blue_patch, orange_patch],
+        fontsize=9,
+        loc="lower right",
+        framealpha=0.9,
+    )
 
     ax.grid(axis="x", linewidth=0.4, alpha=0.5, zorder=0)
     ax.set_axisbelow(True)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
+    ax.margins(x=0.12)
 
     plt.tight_layout()
     out_path = os.path.join(output_dir, "figure4_policy_comparison.pdf")
@@ -388,10 +400,12 @@ def make_figure_ftb_share(summary: pd.DataFrame, output_dir: str):
     )
     ax.axvline(0, color="#333333", linewidth=0.9, linestyle="--", zorder=2)
 
+    pad = 0.02 * (data["ci_upper"].max() - data["ci_lower"].min())
     for i, row in data.iterrows():
         value = row["mean_diff"]
+        anchor = row["ci_upper"] if value >= 0 else row["ci_lower"]
         ax.text(
-            value + (0.002 if value >= 0 else -0.002),
+            anchor + (pad if value >= 0 else -pad),
             i,
             f"{value:+.3f}",
             va="center",
@@ -419,6 +433,7 @@ def make_figure_ftb_share(summary: pd.DataFrame, output_dir: str):
     ax.set_axisbelow(True)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
+    ax.margins(x=0.12)
 
     plt.tight_layout()
     for ext in ("pdf", "png"):
