@@ -1,8 +1,14 @@
+# Progressive annual tax on portfolio size.
+#
+# The previous brackets started at 10 units and topped out at 350, against a
+# realised institutional portfolio distribution of roughly 0-18 units, so most
+# holdings sat in the 0% bracket and the rest in the 1% one: the "progressive"
+# structure was never reached and the scenario tested an almost-zero tax.
+# Brackets are now scale-relative and span the realised distribution.
 - type: portfolio_tax
   brackets:
-    - {min_units: 0,   max_units: 10,  rate: 0.0}
-    - {min_units: 10,  max_units: 50,  rate: 0.01}
-    - {min_units: 50,  max_units: 100, rate: 0.05}
-    - {min_units: 100, max_units: 350, rate: 0.10}
-    - {min_units: 350, max_units: null, rate: 0.20}
+    - {min_units_per_1000_households: 0,    max_units_per_1000_households: 16.7, rate: 0.0}
+    - {min_units_per_1000_households: 16.7, max_units_per_1000_households: 33.3, rate: 0.01}
+    - {min_units_per_1000_households: 33.3, max_units_per_1000_households: 50.0, rate: 0.03}
+    - {min_units_per_1000_households: 50.0, max_units: null,                     rate: 0.06}
   applies_to: [institutional]

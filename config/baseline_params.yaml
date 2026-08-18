@@ -1,14 +1,26 @@
 #placeholder parameters for initial test - run_calibration to see actual
 
 simulation:
-  n_households: 300 
-  small_landlord_fraction: 0.02 
-  institutional_investor_fraction: 0.013 
-  use_external_appreciation_data: false 
-  
- 
+  n_households: 300
+  # Landlord/investor counts are set so the initial rental stock lands on two
+  # calibration targets at once:
+  #   - institutional investors hold ~30% of the single-family rental stock
+  #     (the metro Atlanta figure cited in the paper)
+  #   - small landlords hold 2-10 units each (the paper's own definition)
+  # With units_per_household 0.5, a 300-household run has 150 rental units:
+  # 45 institutional (~12 each across ~4 investors) and 105 mom-and-pop
+  # (~6 each across ~18 landlords).
+  small_landlord_fraction: 0.058
+  institutional_investor_fraction: 0.0125
+  use_external_appreciation_data: false
+
+
 initial_rental_stock:
   units_per_household: 0.5 #was 150/300
+  # share of the initial rental stock handed to institutional investors; the
+  # remainder goes to small landlords. Previously the initial stock was left
+  # ownerless, so ~35% of all housing sat inert and untouchable by any policy.
+  institutional_share: 0.30
  
 initial_sale_stock: 
   units_per_household: 0.667 #was 200/300
@@ -69,6 +81,14 @@ price_reduction_eq8:
   epsilon_std: 0.08
   vacancy_tax_multiplier_investor: 1.5 #investor-held vacant listings reprice faster
 
+rental_market:
+  # frictional void between tenancies: a vacated unit needs cleaning, repair and
+  # marketing before it can be re-let. With no void, turnover produces zero
+  # measured vacancy because the rental market re-lets a unit in the same month
+  # it is vacated. One month of void against an ~18-month average lease gives a
+  # turnover vacancy rate in the ACS range for metro Atlanta (~7%).
+  void_months: 1
+
 market_clearing_a4: #appendix multi round auction mechanism
   bid_up_pct: 0.0075 #0.75% bid up per 7-day window
   arrival_window_days: 7.0
@@ -81,6 +101,11 @@ investor_yield_eq9_eq12:
   delta_institutional: 0.6
   kappa: 0.0631 #long term average rental yield
   policy_cost: 0.0 #not modeled yet
+  # share of positive net rental cash flow institutional investors distribute to
+  # shareholders each month. REIT structures must distribute ~90% of taxable
+  # income; without any outflow investor capital compounds without bound and
+  # their share of the rental stock never stops growing.
+  institutional_payout_ratio: 0.9
 
 investor_probs_eq10_eq13: 
   beta_small_landlord: 50.0

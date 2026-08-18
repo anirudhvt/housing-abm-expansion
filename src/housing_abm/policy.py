@@ -10,7 +10,50 @@ def load_policies(model, policy_paths):  # grab policies from config
     for path in policy_paths or []:
         with open(path) as f:
             model.policies.extend(yaml.safe_load(f))
+    _resolve_policy_scale(model)
+    # invalidate the by-type index built in investor_restrictions
+    model._policy_type_index = None
     _apply_hard_ltv_overrides(model)
+
+
+def _resolve_policy_scale(model):
+    """Convert scale-relative thresholds into unit counts for this run size.
+
+    Unit thresholds written as absolute counts silently change what policy is
+    being tested when the population changes: a 5-unit ownership cap is a
+    severe restriction against 300 households and a nearly vacuous one against
+    3,000, because institutional portfolios scale with the market. Since
+    increasing the population is the main lever for reducing Monte Carlo
+    noise, thresholds have to be expressed per unit of market size or the
+    variance reduction comes at the cost of changing the intervention.
+
+    A policy may specify `*_per_1000_households` instead of an absolute count;
+    it is resolved here against the configured population. Absolute values are
+    left untouched, so existing configs keep working.
+    """
+    households = model.params.get("simulation", {}).get("n_households")
+    households = getattr(model, "_configured_n_households", None) or households
+    if not households:
+        return
+    per_1000 = households / 1000.0
+
+    def _resolve(container, relative_key, absolute_key, floor=1):
+        if relative_key in container:
+            container[absolute_key] = max(
+                floor, int(round(container[relative_key] * per_1000))
+            )
+
+    for policy in model.policies:
+        _resolve(policy, "max_units_per_1000_households", "max_units_absolute")
+        for bracket in policy.get("brackets", []) or []:
+            # a bracket may legitimately start at zero units
+            _resolve(bracket, "min_units_per_1000_households", "min_units", floor=0)
+            if bracket.get("max_units_per_1000_households") is None and (
+                "max_units_per_1000_households" in bracket
+            ):
+                bracket["max_units"] = None
+            else:
+                _resolve(bracket, "max_units_per_1000_households", "max_units")
 
 
 def _apply_hard_ltv_overrides(model):

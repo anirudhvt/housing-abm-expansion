@@ -117,6 +117,7 @@ def _settle_purchase(model, unit, agent, down_payment, final_price):
     unit.on_sale_market = False
     unit.days_on_market = 0
     agent.bank_balance -= down_payment
+    model.record_purchase(agent)
     if _is_investor(agent):
         # investor/landlord: accumulate, don't overwrite prior purchases
         agent.properties.append(unit)
@@ -127,11 +128,13 @@ def _settle_purchase(model, unit, agent, down_payment, final_price):
             # initial listing rent at tract market rate; landlord/investor repricing logic
             # (EQ11) takes over from here in subsequent months
             unit.rent = model.tracts[unit.tract_id].rent_per_quality * unit.quality
-        if unit not in model.rental_units:
-            model.rental_units.append(unit)
+        model.add_rental_unit(unit)
     else:  # otherwise, assign it to the agent
         unit.on_rental_market = False
         unit.tenant = None
+        # the unit has left the rental channel; leaving it in model.rental_units
+        # inflates the rental-vacancy denominator with owner-occupied homes
+        model.drop_rental_unit(unit)
         agent.house = unit
         agent.status = "owning"
         agent.owned_since_month = model.current_month
@@ -139,9 +142,7 @@ def _settle_purchase(model, unit, agent, down_payment, final_price):
 
 def run_ownership_market(model):
     """Multi round double auction clearing of queued buyers against for-sale houses"""
-    for_sale = [
-        u for u in model.for_sale_units if u.on_sale_market
-    ]  # and u.owner is None
+    for_sale = model.active_for_sale()
 
     # EQ 8 repricing if stale listing, regardless of if there are agents bidding
     price_cfg = model.params["price_reduction_eq8"]
@@ -236,11 +237,14 @@ def run_ownership_market(model):
             matched_bids.append(winning_bid)
             sold_offers.append(unit)
 
-        remaining_bids = [b for b in remaining_bids if b not in matched_bids]
-        remaining_offers = [u for u in remaining_offers if u not in sold_offers]
+        sold_ids = {id(u) for u in sold_offers}
+        matched_ids = {id(b) for b in matched_bids}
+        remaining_bids = [b for b in remaining_bids if id(b) not in matched_ids]
+        remaining_offers = [u for u in remaining_offers if id(u) not in sold_ids]
 
     # bids left over after all rounds go back to the rental market
-    unmatched = [bid for bid in model._ownership_bid_queue if bid not in matched_bids]
+    matched_ids = {id(b) for b in matched_bids}
+    unmatched = [bid for bid in model._ownership_bid_queue if id(bid) not in matched_ids]
     for bid in unmatched:
         agent = bid["agent"]
         if (

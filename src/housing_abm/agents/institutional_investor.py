@@ -46,12 +46,35 @@ class InstitutionalInvestor(HouseholdAgent):
             self._collect_rent_and_pay_mortgages()
         )  # analogous to landlords, collect rent and pay mortgage
         self.available_capital += net_rental_cash_flow  # add profit to balance
+        self._distribute_to_shareholders(net_rental_cash_flow)
         self.model.prevent_bankruptcy(self)  # inject cash to prevent bankruptcy
 
         self._reprice_vacant_units()  # no stickiness
         # see if they should buy or sell any houses
         self._evaluate_sell_decision()
         self._evaluate_buy_decision()
+
+    def _distribute_to_shareholders(self, net_cash_flow: float) -> None:
+        """Pay out a share of positive net cash flow, leaving the model.
+
+        Household agents are drained by EQ 2 consumption and small landlords
+        by the same rule, but institutional investors had no outflow of any
+        kind: every dollar of net rental income compounded into buying power
+        forever. That gives them an unbounded capital advantage over every
+        other agent, so their share of the rental stock climbs monotonically
+        (30% -> ~60% over a long run) and the model never reaches a stationary
+        ownership distribution.
+
+        Real single-family rental operators are largely REIT-structured and
+        must distribute the bulk of taxable income to shareholders, so a
+        payout ratio is both the realistic and the stabilising choice.
+        """
+        if net_cash_flow <= 0:
+            return
+        payout_ratio = self.model.params["investor_yield_eq9_eq12"].get(
+            "institutional_payout_ratio", 0.0
+        )
+        self.available_capital -= payout_ratio * net_cash_flow
 
     def _collect_rent_and_pay_mortgages(self) -> float:
         total_rent = sum(
@@ -112,9 +135,8 @@ class InstitutionalInvestor(HouseholdAgent):
                 unit.price = max(
                     unit.price, unit.mortgage_principal
                 )  # see repeat_buyer.py comment
-                unit.on_sale_market = True
                 unit.on_rental_market = False
-                self.model.queue_listing(unit, seller=self)
+                self.model.list_for_sale(unit, seller=self)
 
     def _evaluate_buy_decision(self):
         # see if they should buy, subject to policy restrictions

@@ -17,7 +17,7 @@ HOUSEHOLD_TYPES = (Renter, FirstTimeBuyer, RepeatBuyer, SmallLandlord)
 def run_construction(model):
     cfg = model.params["construction"]
     n_households = sum(1 for a in model.agents if isinstance(a, HOUSEHOLD_TYPES))
-    total_units = len(set(model.for_sale_units) | set(model.rental_units))
+    total_units = model.total_housing_stock()
     target_units = cfg["target_house_to_household_ratio"] * n_households
     deficit = int(round(target_units - total_units))
     if deficit <= 0:
@@ -27,8 +27,7 @@ def run_construction(model):
     for _ in range(deficit):  # create new houses to fill the gap, put on sale market
         unit = HousingUnit(model=model, tract_id="tract_001", quality=1.0)
         unit.price = tract.price_per_quality
-        unit.on_sale_market = True
-        model.for_sale_units.append(unit)
+        model.list_for_sale(unit)
 
 def run_investor_replenishment(model):
     """Keeps investor population proportional to household base"""
@@ -50,7 +49,10 @@ def run_investor_replenishment(model):
         n_households * sim_cfg.get("institutional_investor_fraction", 0.0)
     )
     for _ in range(target_institutional_investors - n_institutional_investors): #fill in gap with normal investors
-        available_capital = float(model.random_gen.lognormal(mean=14.5, sigma=0.7))
+        # same distribution as the initial cohort in AtlantaHousingModel.__init__;
+        # these previously differed by a factor of ~5, so every replenished
+        # investor entered far richer than the ones it replaced
+        available_capital = float(model.random_gen.lognormal(mean=13.0, sigma=0.5))
         InstitutionalInvestor(
             model=model, available_capital=available_capital, tract_id="tract_001"
         )

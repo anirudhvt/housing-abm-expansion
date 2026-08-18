@@ -118,11 +118,10 @@ class SmallLandlord(HouseholdAgent):
                 unit.price = max(
                     unit.price, unit.mortgage_principal
                 )  # see repeat_buyer.py comment
-                unit.on_sale_market = True
                 unit.on_rental_market = (
                     False  # can't be biddable in both markets at one time
                 )
-                self.model.queue_listing(unit, seller=self)
+                self.model.list_for_sale(unit, seller=self)
 
     def _evaluate_buy_decision(self):
         """EQ 9/10; expected yield -> purchase probability -> bid on ownership market"""

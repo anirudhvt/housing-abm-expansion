@@ -14,12 +14,23 @@ def generate_placeholder_rental_stock(
     "Creates fixed rental stock for skeleton market"
     # TODO: replace with tract-based generation
 
+    # same mean-preserving lognormal quality spread as the sale stock, so
+    # rental and owner-occupied units are drawn from one housing distribution
+    cfg = model.params.get("initial_sale_stock", {})
+    quality_sigma = cfg.get("quality_sigma", 0.45)
+    mu = -(quality_sigma ** 2) / 2  # E[quality] == 1
+    tract = model.tracts["tract_001"]
+
     units = []
     for _ in range(n_units):
-        unit = HousingUnit(model=model, tract_id="tract_001", quality=1.0)
+        quality = float(model.random_gen.lognormal(mean=mu, sigma=quality_sigma))
+        unit = HousingUnit(model=model, tract_id="tract_001", quality=quality)
+        # rental units need a sale price too: once they have an owner, that
+        # owner can decide to sell them, and the sale market needs a price
+        unit.price = tract.price_per_quality * quality
         # placeholder rent, small noise around base rent
         unit.rent = small_landlord_rent(
-            r_bar_tract=base_rent,
+            r_bar_tract=base_rent * quality,
             f_bar_tract=0.0,
             alpha=0.0,
             beta=0.0,
@@ -55,11 +66,21 @@ def run_rental_market(model):
     for unit in model.rental_units:
         if unit.tenant is None and unit.on_rental_market:
             unit.day_vacant += 1
+
+    # a unit still inside its void period counts as vacant stock but is not
+    # yet available to let. Availability is read before the counter is
+    # decremented, so a unit vacated during this month's agent step actually
+    # sits out a month rather than being re-let immediately.
     vacant_units = [
         unit
         for unit in model.rental_units
-        if unit.on_rental_market and unit.tenant is None
+        if unit.on_rental_market
+        and unit.tenant is None
+        and unit.void_months_remaining <= 0
     ]
+    for unit in model.rental_units:
+        if unit.void_months_remaining > 0:
+            unit.void_months_remaining -= 1
     if not vacant_units or not model._rental_bid_queue:  # no houses or no renters
         return
 
@@ -140,8 +161,10 @@ def run_rental_market(model):
             matched_agents.append(winner)
             leased_units.append(unit)
 
-        remaining_agents = [a for a in remaining_agents if a not in matched_agents]
-        remaining_units = [u for u in remaining_units if u not in leased_units]
+        matched_ids = {id(a) for a in matched_agents}
+        leased_ids = {id(u) for u in leased_units}
+        remaining_agents = [a for a in remaining_agents if id(a) not in matched_ids]
+        remaining_units = [u for u in remaining_units if id(u) not in leased_ids]
 
         # unmatched bidders resubmit next month
         model._rental_bid_queue = []  # clear queue to prevent carryover issues

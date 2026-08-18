@@ -35,6 +35,9 @@
 """
 from collections import deque
 
+# one model step is one calendar month; policy configs are written in days
+DAYS_PER_MODEL_STEP = 30
+
 _WEALTH_KEY_TO_TAG = {
     "small_landlord": "small_landlord",
     "institutional_investor": "institutional",
@@ -54,7 +57,18 @@ def _applies(policy: dict, agent) -> bool:
 
 
 def _policies_of_type(model, policy_type: str) -> list[dict]:
-    return [p for p in model.policies if p.get("type") == policy_type]
+    """Policies of one type, indexed once per model rather than re-scanned.
+
+    This is called inside the per-bid/per-unit matching loops, which made it
+    one of the hottest functions in the whole simulation.
+    """
+    index = getattr(model, "_policy_type_index", None)
+    if index is None:
+        index = {}
+        for policy in model.policies:
+            index.setdefault(policy.get("type"), []).append(policy)
+        model._policy_type_index = index
+    return index.get(policy_type, ())
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +82,6 @@ def passes_unit_level_policies(model, agent, unit) -> bool:
     waiting_period and geographic_restriction policies.
 
     """
-    DAYS_PER_MODEL_STEP = 30  # one model step = one month, approximated as 30 days
     for policy in _policies_of_type(model, "waiting_period"):
         if not _applies(policy, agent):
             continue
@@ -182,9 +195,8 @@ def apply_forced_divestiture(model):
                 tract = model.tracts[unit.tract_id]
                 unit.price = tract.avg_sold_price(unit.quality)
                 unit.price = max(unit.price, unit.mortgage_principal)
-                unit.on_sale_market = True
                 unit.on_rental_market = False
-                model.queue_listing(unit, seller=agent)
+                model.list_for_sale(unit, seller=agent)
 
 
 # ---------------------------------------------------------------------------
@@ -213,10 +225,15 @@ def compute_policy_cost(model, agent) -> float:
     for policy in _policies_of_type(model, "vacancy_tax"):
         if not _applies(policy, agent):
             continue
-        threshold = policy.get("vacancy_threshold_days", 90)
+        # HousingUnit.day_vacant is incremented once per model step, and a
+        # step is one month -- so it counts months, not days. Comparing it
+        # directly against vacancy_threshold_days meant a "90 day" grace
+        # period was enforced as 90 months (7.5 years), and the vacancy tax
+        # essentially never bound on any unit.
+        threshold_months = policy.get("vacancy_threshold_days", 90) / DAYS_PER_MODEL_STEP
         n_vacant_over_threshold = sum(
             1 for u in agent.properties
-            if u.tenant is None and getattr(u, "day_vacant", 0) >= threshold
+            if u.tenant is None and getattr(u, "day_vacant", 0) >= threshold_months
         )
         if n_vacant_over_threshold > 0 and agent.properties:
             # scale the annual rate by the share of the portfolio sitting

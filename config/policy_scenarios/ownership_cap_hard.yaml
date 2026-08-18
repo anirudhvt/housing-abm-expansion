@@ -1,4 +1,6 @@
+# Hard cap: bids above the cap are refused and excess holdings must be sold
+# as they fall vacant.
 - type: ownership_cap
-  max_units_absolute: 5
+  max_units_per_1000_households: 16.7   # 5 units at the 300-household scale
   enforcement: hard
   applies_to: [institutional]

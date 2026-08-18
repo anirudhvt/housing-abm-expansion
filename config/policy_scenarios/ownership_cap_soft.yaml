@@ -1,5 +1,10 @@
+# Soft cap: bids above the cap are allowed through only at a rate that keeps
+# realised exceedance near the target share. No forced divestiture.
+#
+# Thresholds are expressed per 1000 households so the policy means the same
+# thing at any population size (see policy._resolve_policy_scale).
 - type: ownership_cap
-  max_units_absolute: 5
+  max_units_per_1000_households: 16.7   # 5 units at the 300-household scale
   enforcement: soft
   soft_target_exceedance_fraction: 0.10
   soft_window_months: 12
