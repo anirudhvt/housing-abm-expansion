@@ -397,3 +397,204 @@ positive rate looks like.
 
 The reversal of the paper's headline finding is therefore not an artefact of a
 parameter choice.
+
+
+---
+
+## 8. Porting the reference Java model's price-formation mechanism
+
+Section 5's `beta_institutional` sensitivity sweep was run against a known
+limitation flagged in that section's own diagnosis but not yet fixed: the
+model was pinned at 300-900 households partly because `tract.price_per_quality`
+was a hard overwrite from the raw median of the last 60 sales, with no
+smoothing and no reversion to any fundamental level. In a thin market that
+raw median is a noisy estimator, and because next month's appreciation signal
+(EQ4) is computed from that same series, its jumps compound: a noisy jump
+raises `g`, which raises `desired_expenditure` (EQ3) via `1/(1-beta*g)`,
+which raises the next sale price, which raises the median further. Measured
+at 300 households this produced a price level running to **~29x median
+household income after 15 years** (vs ~7.6x at 900 households) -- a reflexive
+bubble specific to thin markets, not a calibration-band miss, and the direct
+cause of the low homeownership rate and inflated appreciation reported for
+N=300 in Section 5.
+
+The reference Java model (Baptista et al. 2016;
+`housing/collectors/HousingMarketStats.java`) never does a raw overwrite.
+Every price series in it is formed by two-stage smoothing:
+
+1. **EMA.** Blend this month's actual transaction average into a running
+   smoothed price at a fixed monthly weight
+   (`SMOOTHING_FACTOR`, derived from `CUMULATIVE_WEIGHT_BEYOND_YEAR = 0.25`
+   via `1 - 0.25^(1/12) ~= 0.109`). Skipped in months with no sales.
+2. **Reversion to reference.** Every month, regardless of sales, pull the
+   smoothed price back toward a *fixed calibrated reference level* scaled by
+   an evolving house price index: `DECAY * smoothed + (1-DECAY) * (HPI *
+   reference_price)`, with `MARKET_AVERAGE_PRICE_DECAY = 0.5`.
+
+Stage 2 is what a pure EMA lacks: nothing stops an EMA-only price from
+drifting arbitrarily far from fundamentals over a long sales drought, since
+it only ever updates toward whatever (possibly sparse, possibly noisy)
+transactions happen to occur. This is now ported into `Tract` (see
+`src/housing_abm/tract.py` and the `market_smoothing` / `tract_calibration`
+sections of `config/baseline_params.yaml`), using the reference's own
+calibrated constants.
+
+### An adaptation the port required, and why
+
+The reference model pools each month's sales across many quality bins
+(`N_QUALITIES`) before computing its house price index, which averages out a
+lot of single-transaction noise even when any one bin trades thinly. This
+Atlanta port has one continuous-quality price series per tract, not banded
+quality classes to pool across -- so a first implementation, which recomputed
+`house_price_index` directly from each month's (necessarily sparse) sales,
+still blew up: an outlier month's raw ratio fed straight into the reversion
+term at 50% weight, effectively double-counting that same month's noise
+instead of damping it (stage 1 had already absorbed ~11% of it; stage 2 then
+pulled toward a reversion target contaminated by the same observation).
+`house_price_index` is therefore also EMA'd here, at the same
+`smoothing_factor` -- a structural adaptation for the single-tract case, not
+a value taken from the reference. `tests/test_tract_price_formation.py`
+pins this specifically (`test_house_price_index_is_smoothed_not_overwritten`).
+
+### Calibration data wired in alongside the mechanism
+
+The reference price level itself was also a hand-typed round default
+(`250_000.0` / `1400.0`) rather than pulled from the calibration data
+already present in the repo. `atlanta_zillow_zhvi.csv` /
+`atlanta_zillow_zori.csv` were already committed but unused (their loader in
+`external_data.py` is only wired to the *optional*, off-by-default exogenous
+appreciation path, not to the model's initial/reference price level). Their
+calendar-2019 means are:
+
+| | computed from CSV | paper's Section III figure |
+|---|---|---|
+| ZHVI (price) | $248,716.72 | "$248,717" |
+| ZORI (rent) | $1,307.55 | "$1,308" |
+
+This confirms the CSVs are the paper's actual cited calibration source, just
+not connected to the code. `reference_price_per_quality` and
+`reference_rent_per_quality` (`config/baseline_params.yaml`
+`tract_calibration`) now use these values, and the initial rental stock
+(`generate_placeholder_rental_stock`, previously hard-coded to `1400.0`
+regardless of the tract's own rent level) now reads the tract's calibrated
+rent instead of its own separate default.
+
+### Result
+
+| households | price/income after 15yr, before fix | after fix |
+|---|---|---|
+| 300 | ~29x | ~9.5x |
+| 600 | -- | ~8.1x |
+
+Both `annual_appreciation_g` runs no longer diverge; the price level converges
+rather than exploding. Re-validating across the population range:
+
+| N | homeownership | rental vacancy | appreciation | months of inventory | targets met |
+|---|---|---|---|---|---|
+| 300 | 0.393 OUT (low) | 0.127 OK | 0.050 OUT (high) | 3.40 OK | 5/7 |
+| 450 | 0.517 OK | 0.033 OUT (low) | 0.036 OUT (high) | 5.60 OK | 5/7 |
+| 600 | 0.521 OK | 0.038 OUT (low) | 0.032 OUT (high) | 5.73 OK | 5/7 |
+| 900 | 0.561 OK | 0.036 OUT (low) | 0.029 OUT (high) | 7.42 OK | 5/7 |
+
+Homeownership is now stable and within band from N=450 up (previously it swung
+with population size in a way that tracked the runaway directly). Rental
+vacancy's shortfall is the pre-existing, separately-diagnosed limitation from
+Section 1 (still trending down as N grows, unrelated to price formation).
+
+**A new, distinct finding**: `annual_appreciation_g` is now *systematically*
+above its target band across every population size, converging toward roughly
+**+3%/year real** as N grows, rather than exploding. This is no longer a
+thin-market artifact -- it is population-invariant, which means it is a real
+property of the model's demand-side dynamics, not sampling noise. Construction
+was checked and ruled out as the cause: the housing-stock-to-household ratio
+holds steady at its 1.098 target throughout (1.093-1.108 across a 180-month
+window at N=600), so supply is not lagging population growth. The remaining
+candidate is EQ3's own reflexive term (`desired_expenditure` scales with
+`1/(1-beta*g)`, `beta=0.3`): raising `g` raises demand, which raises the next
+period's realized appreciation, which raises `g` again -- smoothing the
+*measurement* of price does not remove this *behavioral* feedback, it only
+stops the measurement itself from being the noise source. Whether the
+reference model's `MARKET_AVERAGE_PRICE_DECAY = 0.5` is strong enough to fully
+cancel this loop depends on how EQ3's demand elasticity compares to the
+reference model's own (differently parameterized) equivalent -- they were not
+calibrated together. Closing this gap further means either strengthening the
+reversion (a port decision) or revisiting EQ3's `beta` (a recalibration of
+this model's own documented equation, not a port) -- deliberately left open
+rather than decided unilaterally.
+
+---
+
+## 9. Data sources: what's used, what exists but isn't wired, what's missing
+
+The reference Java model draws on several UK-specific empirical inputs this
+port either has an equivalent for, has-but-doesn't-use, or has no analogue
+for at all. Organized by which of those three:
+
+**Already has a working equivalent:**
+- Down payment distributions: reference fits `DOWNPAYMENT_FTB_SCALE/SHAPE`
+  and `DOWNPAYMENT_OO_SCALE/SHAPE` (lognormal, by income percentile) from PSD
+  survey data; this model fits the equivalent from HMDA
+  (`scripts/fit_downpayment_lognormal.py` -> `downpayment_lognormal_params.csv`).
+- Price/rent level calibration: reference uses UK HPI/ONS reference prices per
+  quality band; this model now uses Zillow ZHVI/ZORI 2019 means (Section 8
+  above) as the single-tract equivalent.
+- Appreciation validation target: reference validates against ONS house price
+  data; this model validates against Case-Shiller ATXRSA
+  (`atlanta_case_shiller.csv`, already wired in `validate_against_paper.py`).
+
+**Exists in the repo but is not wired in -- worth connecting:**
+- `atlanta_zillow_zhvi.csv` / `atlanta_zillow_zori.csv` full monthly series
+  (2015-2026, not just the 2019 mean used above) could drive
+  `external_g_series` / `external_rent_growth_series` for historical
+  validation runs the way the reference model can be run against actual
+  historical HPI, rather than only for the always-on baseline calibration
+  level. Currently `external_g_series = None` unconditionally in `model.py`.
+- `atlanta_hmda_2019.csv` has loan-level records beyond what
+  `fit_downpayment_lognormal.py` currently extracts (e.g., applicant
+  income, action taken, denial reason) that could support an FTB
+  qualification-rate check analogous to the reference's LTI-by-age
+  regression (below).
+
+**No analogue exists -- would need new data to port faithfully:**
+- **Empirical age-distribution histogram.** The reference model's
+  `Demographics.java` steers births/deaths *every month* toward a real
+  monthly-binned age histogram from ONS data, continuously self-correcting
+  any drift. This port instead derives a one-time *stationary* age
+  distribution analytically from the mortality hazard (Section 4) and only
+  gets the *initial* condition right -- it does not have a real Atlanta
+  age-distribution target to steer toward continuously. **ACS/PUMS microdata
+  for the seven Atlanta counties (age x household-formation) would let this
+  be ported properly** -- it's a more robust fix than the analytic
+  steady-state approach already in place, since it self-corrects over time
+  rather than only at initialization.
+- **Empirical initial sale/rent markup distributions.** The reference draws
+  `saleMarkUpPdf` / `rentMarkUpPdf` from real listing-vs-eventual-sale-price
+  data (a Zoopla/HPI-derived empirical distribution, not a parametric guess).
+  EQ7's `asking_price` here uses a parametric lognormal-noise term instead
+  (`asking_price_eq7` config) with no empirical distribution behind it.
+  **A comparable Atlanta listing-vs-sale-price dataset** (Zillow's
+  transaction-level data, or a county assessor/MLS extract if accessible)
+  would let this be fit the same way, rather than assumed.
+- **LTI-by-age regression coefficients.** `decideLTV()` in the reference is a
+  fitted linear regression of target loan-to-value on income and age,
+  separately for FTBs and home-movers, calibrated against UK mortgage data.
+  This model's mortgage terms (`config/mortgage_terms.yaml`) use flat
+  regulatory maxima (FHA/conventional LTV/DTI ceilings) rather than an
+  age-conditioned empirical curve. HMDA carries applicant age brackets in
+  some vintages; **if the pulled HMDA extract includes age, a comparable
+  regression could be fit** the same way the down payment distributions
+  already are.
+- **Income-percentile-conditioned BTL/investor propensity.** The reference's
+  `BTLProbability` is a binned empirical curve (probability of carrying the
+  "BTL gene" by income percentile). This model instead sets institutional
+  and small-landlord *counts* directly from fixed population fractions
+  (`config/baseline_params.yaml` `simulation`), with no income-percentile
+  dependence on which households become investors. No US household-level
+  survey-based analogue was identified for this session; the Survey of
+  Consumer Finances might carry a usable investment-property-ownership rate
+  by income percentile, but this was not checked.
+
+None of the "no analogue" items block the model from running or from the
+policy comparisons already delivered -- they would each incrementally improve
+fidelity to the reference's *empirical* grounding, not fix a defect the way
+the price-formation port did.

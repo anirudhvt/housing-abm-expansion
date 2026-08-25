@@ -87,6 +87,52 @@ sale_market:
   # market runs, without distorting the price level.
   withdraw_after_months: 6
 
+tract_calibration:
+  # 2019 Atlanta-metro price and rent levels, computed as the calendar-2019
+  # mean of atlanta_zillow_zhvi.csv / atlanta_zillow_zori.csv (both already in
+  # the repo, previously unused). These match the paper's own cited Section
+  # III figures almost exactly (ZHVI $248,717, ZORI $1,308), confirming the
+  # CSVs are the actual calibration source -- they just weren't wired into the
+  # model's initial conditions, which instead used hand-typed round defaults
+  # (250000 / 1400). This is the "reference price" the tract's smoothed price
+  # series reverts toward -- see market_smoothing below and Tract.__init__.
+  reference_price_per_quality: 248716.72   # 2019 ZHVI mean (12 monthly obs)
+  reference_rent_per_quality: 1307.55      # 2019 ZORI mean (12 monthly obs)
+
+market_smoothing:
+  # Ported from the reference Java model (Baptista et al. 2016,
+  # HousingMarketStats.java / config.properties). The Atlanta port previously
+  # hard-overwrote tract.price_per_quality with the raw median of the last 60
+  # sales every month. In a thin market (few sales/month) that raw median is a
+  # noisy estimator with occasional large jumps, and because next month's
+  # appreciation signal (EQ4) is computed FROM that same series, those jumps
+  # compound: a jump raises g, which raises desired_expenditure (EQ3), which
+  # raises the next sale price, which raises the median further. Measured at
+  # 300 households this ran the price level to ~29x median income (vs ~7.6x
+  # at 900 households) inside 15 years -- a reflexive bubble specific to thin
+  # markets, not a calibration-band miss.
+  #
+  # The reference model avoids this with two-stage smoothing every month:
+  #   1. EMA: blend this month's realized sale average into the smoothed
+  #      price at a fixed monthly weight (smoothing_factor, derived below).
+  #   2. Reversion: pull the smoothed price back toward the fixed calibrated
+  #      reference level (tract_calibration above) scaled by the house price
+  #      index, every month regardless of whether there were sales. This is
+  #      the safety valve a pure EMA lacks -- nothing stops a EMA-only price
+  #      from drifting arbitrarily far from fundamentals over a long enough
+  #      sales drought; the reversion term bounds that drift.
+  #
+  # cumulative_weight_beyond_year: the reference's CUMULATIVE_WEIGHT_BEYOND_YEAR
+  # (config.properties = 0.25) -- the fraction of an EMA's weight still coming
+  # from observations older than 12 months. Converted to a monthly smoothing
+  # factor via smoothing_factor = 1 - cumulative_weight_beyond_year^(1/12).
+  cumulative_weight_beyond_year: 0.25   # -> smoothing_factor ~= 0.1091/month
+  # market_average_price_decay: the reference's MARKET_AVERAGE_PRICE_DECAY
+  # (config.properties = 0.5) -- weight retained on the EMA each month before
+  # blending in the reversion term. At 0.5, half the gap between the smoothed
+  # price and the reference-implied level closes every month.
+  market_average_price_decay: 0.5
+
 price_reduction_eq8:
   reduction_prob: 0.055
   epsilon_std: 0.08

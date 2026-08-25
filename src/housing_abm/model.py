@@ -120,17 +120,41 @@ class AtlantaHousingModel(Model):
         # load LTV/LTI policies, mutates mortgage terms
         load_policies(self, policy_paths)
 
-        #grab real ZHVI/ZORI data 
-
-        #external_g_series = load_g_series("atlanta_zillow_zhvi.csv")
-        #external_rent_growth_series = load_monthly_growth_series("atlanta_zillow_zori.csv")
+        # Real ZHVI/ZORI series (month-over-month growth) can optionally drive
+        # appreciation/rent-growth exogenously instead of computing them
+        # endogenously from the model's own transactions -- off by default,
+        # this is a separate design choice from the price-level calibration
+        # below (which is always applied).
         external_g_series = None
         external_rent_growth_series = None
 
-        self.tracts = {"tract_001": Tract
-                       ("tract_001",
-                        external_g_series=external_g_series,
-                        external_rent_growth_series=external_rent_growth_series)}  # placeholder storage of tracts
+        # Calibrated 2019 Atlanta price/rent level (see config/baseline_params.yaml
+        # tract_calibration for provenance) and the reference model's smoothing
+        # constants (market_smoothing) -- both ported from the Java reference
+        # implementation. smoothing_factor is derived from the reference's
+        # CUMULATIVE_WEIGHT_BEYOND_YEAR the same way its own Config.java does.
+        calib_cfg = self.params.get("tract_calibration", {})
+        smoothing_cfg = self.params.get("market_smoothing", {})
+        reference_price = calib_cfg.get("reference_price_per_quality", 250_000.0)
+        reference_rent = calib_cfg.get("reference_rent_per_quality", 1400.0)
+        cumulative_weight_beyond_year = smoothing_cfg.get(
+            "cumulative_weight_beyond_year", 0.25
+        )
+        smoothing_factor = 1.0 - cumulative_weight_beyond_year ** (1.0 / 12.0)
+        price_decay = smoothing_cfg.get("market_average_price_decay", 0.5)
+
+        self.tracts = {
+            "tract_001": Tract(
+                "tract_001",
+                price_per_quality=reference_price,
+                rent_per_quality=reference_rent,
+                reference_price_per_quality=reference_price,
+                smoothing_factor=smoothing_factor,
+                price_decay=price_decay,
+                external_g_series=external_g_series,
+                external_rent_growth_series=external_rent_growth_series,
+            )
+        }  # placeholder storage of tracts, multi-tract is a planned extension
 
         # trailing history of houses_per_capita per tract
         self.houses_per_capita_history = {tract_id: [] for tract_id in self.tracts}
@@ -267,7 +291,8 @@ class AtlantaHousingModel(Model):
             )
         )
         self.rental_units = generate_placeholder_rental_stock(
-            self, n_units=rental_n_units
+            self, n_units=rental_n_units,
+            base_rent=self.tracts["tract_001"].rent_per_quality,
         )
         self._rental_set = set(self.rental_units)
         self.housing_units.update(self.rental_units)
