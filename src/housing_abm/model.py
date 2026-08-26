@@ -1,4 +1,6 @@
 # top level Mesa model/initial skeleton, monthly cycle
+import warnings
+
 import yaml
 import numpy as np
 from mesa import Model
@@ -124,16 +126,34 @@ class AtlantaHousingModel(Model):
         # appreciation/rent-growth exogenously instead of computing them
         # endogenously from the model's own transactions -- off by default,
         # this is a separate design choice from the price-level calibration
-        # below (which is always applied).
+        # below (which is always applied). Previously this flag was read from
+        # config but never actually consulted here -- external_g_series and
+        # external_rent_growth_series were hardcoded to None regardless of
+        # its value, so the full 2015-2026 ZHVI/ZORI history already checked
+        # into the repo (atlanta_zillow_zhvi.csv / atlanta_zillow_zori.csv)
+        # was never used beyond its 2019 mean (tract_calibration above).
         external_g_series = None
         external_rent_growth_series = None
+        calib_cfg = self.params.get("tract_calibration", {})
+        sim_cfg = self.params.get("simulation", {})
+        if sim_cfg.get("use_external_appreciation_data", False):
+            zhvi_path = calib_cfg.get("zhvi_csv_path", "atlanta_zillow_zhvi.csv")
+            zori_path = calib_cfg.get("zori_csv_path", "atlanta_zillow_zori.csv")
+            try:
+                external_g_series = load_g_series(zhvi_path)
+                external_rent_growth_series = load_monthly_growth_series(zori_path)
+            except (FileNotFoundError, KeyError) as e:
+                warnings.warn(
+                    f"use_external_appreciation_data is set but {zhvi_path}/"
+                    f"{zori_path} could not be loaded ({e}); falling back to "
+                    "endogenous appreciation."
+                )
 
         # Calibrated 2019 Atlanta price/rent level (see config/baseline_params.yaml
         # tract_calibration for provenance) and the reference model's smoothing
         # constants (market_smoothing) -- both ported from the Java reference
         # implementation. smoothing_factor is derived from the reference's
         # CUMULATIVE_WEIGHT_BEYOND_YEAR the same way its own Config.java does.
-        calib_cfg = self.params.get("tract_calibration", {})
         smoothing_cfg = self.params.get("market_smoothing", {})
         reference_price = calib_cfg.get("reference_price_per_quality", 250_000.0)
         reference_rent = calib_cfg.get("reference_rent_per_quality", 1400.0)

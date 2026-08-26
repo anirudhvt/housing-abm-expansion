@@ -27,6 +27,16 @@ FIELDS = [
     "income", "debt_to_income_ratio", "combined_loan_to_value_ratio",
     "total_units", "purchaser_type", "applicant_credit_score_type",
     "interest_rate",
+    # Bucketed borrower age ("<25", "25-34", ..., ">74", or "8888" for not
+    # applicable), reported since the 2018 HMDA rule. Feeds a real Atlanta
+    # first-time-vs-repeat-buyer age split into demographics.py's
+    # entry_lo/entry_hi and repeat_buyer_promotion.min_tenure_months, which
+    # are currently hand-picked placeholders rather than data-derived.
+    # Verify this field name against the live schema at
+    # https://ffiec.cfpb.gov/documentation/publications/loan-level-datasets/lar-data-fields
+    # before relying on it -- this sandbox's network egress is blocked, so it
+    # could not be checked against the live API from here.
+    "applicant_age",
 ]
 
 

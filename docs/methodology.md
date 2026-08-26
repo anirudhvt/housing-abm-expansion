@@ -598,3 +598,87 @@ None of the "no analogue" items block the model from running or from the
 policy comparisons already delivered -- they would each incrementally improve
 fidelity to the reference's *empirical* grounding, not fix a defect the way
 the price-formation port did.
+
+## 10. Closing three data-wiring gaps found while surveying data sources
+
+Re-reading the codebase against the data-sources question above (Section 9)
+surfaced three places where real, already-downloaded Atlanta data existed but
+was not actually reaching the model or the calibration it was meant to
+inform -- distinct from the "no analogue exists" gaps above, these had no
+missing data, only missing plumbing.
+
+- **`use_external_appreciation_data` was dead config.** The flag existed in
+  `config/baseline_params.yaml`'s `simulation` block and the loader functions
+  (`load_g_series`, `load_monthly_growth_series`) existed in
+  `external_data.py`, but `model.py` hardcoded `external_g_series` and
+  `external_rent_growth_series` to `None` unconditionally -- the flag was
+  read nowhere. The full 2015-2026 `atlanta_zillow_zhvi.csv` /
+  `atlanta_zillow_zori.csv` history (already in the repo) was therefore never
+  used beyond the single 2019 mean wired into `tract_calibration`. Fixed:
+  `model.py` now loads both CSVs when the flag is true, with a path override
+  via `tract_calibration.zhvi_csv_path`/`zori_csv_path` and a `warnings.warn`
+  fallback to the endogenous EQ4 computation if the files are missing.
+  Verified end to end (loads real values, survives several `step()` calls,
+  and falls back cleanly with a warning when a path is wrong) --see
+  `tests/test_external_appreciation_wiring.py`. Left `false` by default:
+  switching a study's price/rent trajectory from endogenous to
+  historical-real is a modeling decision about what the counterfactual
+  policies are being evaluated against, not a plumbing fix, so it wasn't
+  flipped without sign-off.
+- **`pull_zillow_data.py` could never regenerate `atlanta_zillow_zhvi.csv`.**
+  The script's docstring, its `ZHVI_URL` constant, and its CLI all claimed to
+  pull ZHVI (home values), but the URL actually pointed at Zillow's ZORI
+  (rent index) endpoint, and its only output was `atlanta_zillow_zori.csv`.
+  The already-checked-in `atlanta_zillow_zhvi.csv` must have been produced
+  some other way; running the script as committed could not have produced
+  it. Fixed by pulling both series explicitly from their own correctly
+  labeled URLs into their own output files. Not re-run here (see the network
+  note below) -- the existing checked-in CSVs are unchanged and still what
+  the model uses.
+- **`pull_hmda_data.py` never requested `applicant_age`.** HMDA's public
+  loan-level API has carried a bucketed borrower age field since the 2018
+  reporting rule; Section 9 flagged this as the single highest-value,
+  lowest-effort gap (age is the input the reference model's own `AgeDist.py`
+  calibration script is built around, and the equivalent field here was
+  simply never asked for). Added it to `FIELDS`, with a comment pointing at
+  where to confirm the exact field name against the live schema once this
+  can be pulled with real network access.
+
+While in the down-payment calibration code, also found and exercised
+`equations/mortgage.estimate_floor_share_and_fit` -- a fit-a-lognormal-to-HMDA
+helper that was written (correct docstring, correct math) but never called by
+anything. Wrote `scripts/calibrate_downpayment_eq17.py` to actually run it
+against `atlanta_hmda_2019.csv`, using `loan_type` (FHA vs. conventional) as a
+proxy for first-time vs. repeat buyer, since HMDA carries no direct
+first-time-buyer flag. Result, compared against the current
+`downpayment_eq17` config:
+
+| | `p_floor` | `lognorm_m` | `lognorm_s` |
+|---|---|---|---|
+| Config: first_time_buyer | 0.55 | -1.6 | 0.5 |
+| **Data (FHA, n=15,523)** | **0.917** | **-2.184** | **0.528** |
+| Config: repeat_buyer | 0.55 | -0.8 | 0.75 |
+| **Data (conventional, n=42,635)** | **0.372** | **-1.701** | **0.510** |
+
+The gaps are large enough to matter (`p_floor` in particular: real FHA
+borrowers cluster at the minimum far more than the config assumes, real
+conventional borrowers far less). This was **not** applied to
+`baseline_params.yaml` -- `loan_type` is a proxy, not a ground-truth
+first-time-buyer flag (a repeat buyer can take out an FHA loan; a first-time
+buyer can use a low-down-payment conventional program), and this parameter
+pair is the one the entire policy comparison turns on. Adopting it is a
+methodology call, not a plumbing fix, and is left for review alongside the
+other Section 9 findings.
+
+**On the "check if network egress works" question**: it does not, from this
+sandbox. `curl`/`WebFetch` to every external host tried (`ffiec.cfpb.gov`,
+`federalreserve.gov`, `api.stlouisfed.org`, `census.gov`, even
+`google.com`/`example.com`) returned a `403` at the egress proxy
+(`gateway answered 403 to CONNECT`, confirmed via
+`$HTTPS_PROXY/__agentproxy/status`); only GitHub and the package registries
+already allowlisted for this environment are reachable. So the HMDA/Zillow
+pull-script fixes above are code-only -- they could not be run to produce
+fresh data from here, and the exact HMDA age field name could not be
+verified against the live CFPB schema. Both need to be run from a machine
+with normal internet access (e.g. the user's own) before the new field or
+the corrected ZHVI pull actually reach a CSV on disk.
