@@ -682,3 +682,46 @@ fresh data from here, and the exact HMDA age field name could not be
 verified against the live CFPB schema. Both need to be run from a machine
 with normal internet access (e.g. the user's own) before the new field or
 the corrected ZHVI pull actually reach a CSV on disk.
+
+### 10a. What adopting the down-payment fit above would actually do
+
+The first pass of the fit above used one blanket `floor_band=0.05` for both
+buyer types, which is wrong -- the model's own floor is 3.5% for first-time
+buyers (FHA) and 20% for repeat buyers (conventional), not 5% for both.
+Re-fit with each buyer type's own floor
+(`scripts/calibrate_downpayment_eq17.py`, `floor_band=d_minimum_pct`):
+
+| | `p_floor` | `lognorm_m` | `lognorm_s` |
+|---|---|---|---|
+| Data (FHA, floor=3.5%) | 0.851 | -2.627 | 0.641 |
+| Data (conventional, floor=20%) | 0.812 | -1.150 | 0.297 |
+
+Rather than reason about the effect by hand, `scripts/compare_downpayment_calibration.py`
+runs the same paired-CRN design as `run_all_policies.py` -- one shared
+120-month spin-up per seed under the *current* config, forked into a
+baseline arm and an arm that switches to the values above for the
+120-month measurement window -- at 60 seeds x 600 households
+(`results/downpayment_calibration_raw.csv` / `_summary.json`). Result:
+
+- **Homeownership rate and both purchase-share metrics: no detectable
+  effect.** FTB purchase share moves +0.85pp (p=0.067) but does not survive
+  Holm correction across the 7 outcomes tested; homeownership rate and
+  repeat-buyer purchase share are indistinguishable from zero (MDE ~0.4-1.6pp
+  at this seed count).
+- **Leverage moves, precisely.** Mean owner-occupier LTV: +0.87pp
+  (95% CI [+0.66pp, +1.07pp], p_holm<0.0001). Mean owner-occupier LTI: +1.07pp
+  (95% CI [+0.48pp, +1.66pp], p_holm=0.0035). Buyers who purchase carry
+  measurably more debt relative to price and income -- exactly the mechanism
+  predicted (smaller down payment -> larger loan for the same price) -- but it
+  does not translate into more purchases at this scale.
+- **Institutional share of rentals (negative control): no effect**, as
+  expected -- `downpayment_eq17` only touches owner-occupier down payments,
+  never investor mechanics (`downpayment_eq18`).
+
+So adopting these values would not change the headline finding the paper's
+policies are evaluated on (who ends up buying, and at what homeownership
+rate); it would raise the modeled leverage of owner-occupier purchases by
+about one percentage point on both LTV and LTI, with no effect on the
+institutional-investor side of the model. Left un-adopted in
+`baseline_params.yaml` pending review of the `loan_type`-as-buyer-type proxy
+caveat above.
