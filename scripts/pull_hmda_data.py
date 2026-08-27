@@ -55,6 +55,14 @@ def pull_year(year: int) -> pd.DataFrame:
     resp.raise_for_status()
     df = pd.read_csv(io.StringIO(resp.text), low_memory=False)
     keep = [c for c in FIELDS if c in df.columns]
+    missing = [c for c in FIELDS if c not in df.columns]
+    if missing:
+        print(
+            f"WARNING: requested field(s) not present in the API response, "
+            f"silently dropped: {missing}",
+            file=sys.stderr,
+        )
+        print(f"Columns the API actually returned: {list(df.columns)}", file=sys.stderr)
     return df[keep]
 
 def clean_hmda(df: pd.DataFrame) -> pd.DataFrame:
