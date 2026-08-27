@@ -725,3 +725,60 @@ about one percentage point on both LTV and LTI, with no effect on the
 institutional-investor side of the model. Left un-adopted in
 `baseline_params.yaml` pending review of the `loan_type`-as-buyer-type proxy
 caveat above.
+
+### 10b. Replacing the proxy with a genuine first-time-buyer flag
+
+HMDA has no direct first-time-buyer field, so 10a's fit used loan type
+(FHA vs. conventional) as a stand-in. Fannie Mae's Single-Family Loan
+Performance Data does carry a genuine field for this -- `First Time Home
+Buyer Indicator` (Y/N), reported by the lender at origination, not
+inferred. The user pulled a real extract (2019 Q1, filtered to the Atlanta
+MSA, CBSA 12060) from Fannie Mae's Data Dynamics portal and it was fit the
+same way (`scripts/calibrate_downpayment_eq17_fnma.py`), split on the real
+flag instead of the loan-type proxy, one row per loan (the file is a
+monthly performance panel; origination terms don't change month to month,
+so only the first reporting month per loan is kept), restricted to
+purchase-money, owner-occupied loans:
+
+| | n | `p_floor` | `lognorm_m` | `lognorm_s` |
+|---|---|---|---|---|
+| Config: first_time_buyer | -- | 0.55 | -1.6 | 0.5 |
+| Proxy fit (FHA, 10a) | 15,523 | 0.851 | -2.627 | 0.641 |
+| **Ground truth (real FTB flag)** | **1,718** | **0.335** | **-2.226** | **0.702** |
+| Config: repeat_buyer | -- | 0.55 | -0.8 | 0.75 |
+| Proxy fit (conventional, 10a) | 42,635 | 0.812 | -1.150 | 0.297 |
+| **Ground truth (real FTB flag)** | **1,777** | **0.738** | **-0.992 ** | **0.362** |
+
+The genuine flag doesn't just refine the proxy's first-time-buyer number --
+it reverses it. The proxy said 85% of FHA borrowers sit at the down-payment
+floor; the real flag says only 33.5% of *actual first-time buyers* do,
+*below* the model's own 55% assumption, not above it. FHA-borrower and
+first-time-buyer are overlapping but distinct populations (plenty of
+first-time buyers use low-down-payment conventional programs instead of
+FHA; not every FHA borrower is buying a first home), and the proxy was
+measuring loan-program choice, not buyer-type behavior. The repeat-buyer
+number moved in the same direction as the proxy suggested (more
+floor-clustering than the config assumes), just to a different value.
+
+Re-running `scripts/compare_downpayment_calibration.py` with the ground-truth
+values (same 60-seed x 600-household paired design as 10a) gives an even
+smaller, more thoroughly null result than the proxy-based run did:
+
+- Homeownership rate: +0.33pp, p=0.020 unadjusted but p_holm=0.14 -- doesn't
+  survive Holm correction across the 7 outcomes tested, though it's the
+  closest of any outcome to significant.
+- Every other outcome (FTB/repeat purchase share, mean LTV, mean LTI, median
+  price, institutional share of rentals) is indistinguishable from zero,
+  including the LTV/LTI leverage effects that *were* significant under the
+  proxy-based values in 10a -- the real data moves average down payment less
+  than the mismatched-proxy fit did (repeat buyer: 38.2% -> 25.2% of price,
+  vs. the proxy's implied larger swing).
+
+Net: with the actual ground-truth flag in hand, the case for adopting this
+into `baseline_params.yaml` is *weaker* than it looked with the proxy, not
+stronger -- both because the honest effect on headline metrics is smaller,
+and because the first-time-buyer proxy turned out to have gotten the sign
+of its main qualitative claim wrong. Still left un-adopted. The Atlanta
+2019 Q1 extract and this result are single-quarter, single-vintage; a
+sturdier calibration would pool several quarters before treating these
+exact numbers as final.

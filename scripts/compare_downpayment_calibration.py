@@ -1,6 +1,17 @@
-"""Paired comparison: current downpayment_eq17 config vs. the HMDA-fit
-values from scripts/calibrate_downpayment_eq17.py (see docs/methodology.md
-Section 10 for the derivation and the loan_type-as-buyer-type-proxy caveat).
+"""Paired comparison: current downpayment_eq17 config vs. a data-fit
+calibration of it. See docs/methodology.md Section 10/10a/10b for the
+derivation history:
+
+- 10/10a: a first pass fit against HMDA, using loan_type (FHA vs.
+  conventional) as a proxy for first-time vs. repeat buyer, since HMDA
+  carries no direct first-time-buyer flag.
+- 10b: the values below, fit against Fannie Mae's Single-Family Loan
+  Performance Data (Atlanta MSA, 2019 Q1 purchase-money loans), which
+  carries a genuine First Time Home Buyer Indicator reported at
+  origination -- ground truth, not a proxy. This changed the first-time
+  buyer numbers in a way the proxy got backwards (see 10b): real
+  first-time buyers cluster at the down-payment floor *less* than the
+  model assumes, not more.
 
 Same CRN design as run_all_policies.py: one shared spin-up per seed, forked
 into two arms that differ only in downpayment_eq17 from the fork point
@@ -28,21 +39,22 @@ from housing_abm.experiment import (  # noqa: E402
 )
 from housing_abm.metrics import run_window, window_means  # noqa: E402
 
-# Correctly floor-matched fit from calibrate_downpayment_eq17.py: floor_band
-# set to each buyer type's own d_minimum_pct (0.035 FHA / 0.20 conventional)
-# rather than a single blanket threshold.
+# Ground-truth fit from calibrate_downpayment_eq17_fnma.py against Fannie
+# Mae's Single-Family Loan Performance Data, Atlanta MSA (12060), 2019 Q1
+# purchase-money owner-occupied loans, split on the real First Time Home
+# Buyer Indicator (n=1,718 FTB / n=1,777 repeat).
 ADOPTED_DOWNPAYMENT_EQ17 = {
     "first_time_buyer": {
         "d_minimum_pct": 0.035,
-        "floor_share_p_floor": 0.851,
-        "lognorm_m": -2.627,
-        "lognorm_s": 0.641,
+        "floor_share_p_floor": 0.33469150174621654,
+        "lognorm_m": -2.22645358501561,
+        "lognorm_s": 0.7017295474760067,
     },
     "repeat_buyer": {
         "d_minimum_pct": 0.20,
-        "floor_share_p_floor": 0.812,
-        "lognorm_m": -1.150,
-        "lognorm_s": 0.297,
+        "floor_share_p_floor": 0.7383230163196398,
+        "lognorm_m": -0.9921282129710788,
+        "lognorm_s": 0.361770237163324,
     },
 }
 
