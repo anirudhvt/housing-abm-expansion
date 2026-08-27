@@ -782,3 +782,50 @@ of its main qualitative claim wrong. Still left un-adopted. The Atlanta
 2019 Q1 extract and this result are single-quarter, single-vintage; a
 sturdier calibration would pool several quarters before treating these
 exact numbers as final.
+
+### 10c. An age-conditioned LTV/LTI curve (grounding the reference's decideLTV)
+
+`applicant_age` (bucketed: `<25`, `25-34`, ..., `>74`, or `8888` for
+unknown) was confirmed present and populated in the live HMDA API response
+once actually requested -- the field itself checked out, unlike the
+`combined_loan_to_value_ratio` field also in `FIELDS`, which turned out not
+to exist in the current API at all and has now been dropped (this only
+surfaced because of the new missing-field warning in `pull_year()`; it had
+presumably been silently absent from every past pull).
+
+This grounds an input the model previously had zero analogue for: the
+reference's `decideLTV()` is a fitted regression of target LTV on income
+and age, separately for FTBs and home-movers; this model's mortgage terms
+(`config/mortgage_terms.yaml`) use flat regulatory LTV/DTI ceilings with no
+age term whatsoever. HMDA carries no first-time-vs-repeat-buyer flag (see
+10a/10b), so `scripts/calibrate_ltv_by_age.py` fits one pooled regression
+across all owner-occupied purchase loans instead of splitting by buyer
+type, using each age bucket's midpoint as a continuous predictor:
+
+| Age | n | mean LTV | mean LTI | mean income ($k) |
+|---|---|---|---|---|
+| <25 | 2,245 | 92.6 | 3.31 | 77.9 |
+| 25-34 | 19,934 | 91.4 | 3.09 | 98.1 |
+| 35-44 | 18,374 | 89.8 | 3.03 | 122.2 |
+| 45-54 | 12,759 | 88.5 | 2.90 | 131.8 |
+| 55-64 | 6,625 | 86.4 | 2.84 | 126.3 |
+| 65-74 | 2,394 | 83.6 | 3.11 | 99.3 |
+| >74 | 543 | 83.6 | 3.42 | 90.0 |
+
+Mean LTV declines monotonically and substantially with age (92.6% -> 83.6%,
+a real ~9-point spread) -- younger buyers lever up more, controlling for
+nothing else. The regression confirms this is a genuine age effect, not
+just an income artifact: `LTV ~ log(income) + age` gives
+`age_coef = -0.148` (R2=0.115), i.e. roughly 1.5 LTV points lower per
+decade of age, holding income fixed. LTI shows no comparable age
+trend once income is controlled for (`age_coef = -0.0007` on
+`LTI ~ log(income) + age`, R2=0.268) -- the U-shape visible in the raw
+means table is explained by income varying by age, not by age itself.
+
+This is a real, verified finding, but it is not yet wired into the model,
+deliberately: doing so means changing `max_loan_owner_occupier` (EQ14) or
+`chi_max_ltv` from a flat constant into an age-conditioned function, which
+is a structural change to core borrowing logic, not a config edit like
+10a/10b's down-payment work. Left for a follow-up decision on how exactly
+to apply it (e.g. an age-indexed LTV cap adjustment) before touching that
+equation.
