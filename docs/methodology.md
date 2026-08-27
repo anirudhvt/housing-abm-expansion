@@ -826,6 +826,37 @@ This is a real, verified finding, but it is not yet wired into the model,
 deliberately: doing so means changing `max_loan_owner_occupier` (EQ14) or
 `chi_max_ltv` from a flat constant into an age-conditioned function, which
 is a structural change to core borrowing logic, not a config edit like
-10a/10b's down-payment work. Left for a follow-up decision on how exactly
-to apply it (e.g. an age-indexed LTV cap adjustment) before touching that
-equation.
+10a/10b's down-payment work.
+
+Before designing that wiring, it's worth knowing what the reference itself
+actually does with the equivalent mechanism -- and the answer is: nothing.
+`decideLTV()` in the reference's `HouseholdBehaviour.java` is exactly this
+regression (age + income -> target LTV, fitted separately for FTBs and
+home-movers, real UK coefficients baked in), but its only call site is a
+commented-out line in `Household.java`:
+
+```java
+desiredPurchasePrice = behaviour.updateDesiredPurchasePrice(annualGrossEmploymentIncome);
+// desiredPurchasePrice = behaviour.getAltDesiredPurchasePrice(annualGrossEmploymentIncome, behaviour.decideLTV(this));
+```
+
+The live path, `updateDesiredPurchasePrice()`, is income-only (a power law
+in income times lognormal noise) -- no age term. The commented line sits
+under the reference authors' own TODO: *"Decision needed between this and
+previous specification."* They wrote and calibrated the age-conditioned
+version and then shipped the paper's results without it. (The same pattern
+shows up in `decideDownPayment()`: its first-time-buyer branch is just
+`me.getBankBalance()`, with an income-percentile lognormal draw commented
+out as "old ... implementation, kept for now as legacy/alternative" --
+only the repeat-buyer branch uses a calibrated distribution in the live
+code.)
+
+That reframes this finding: it is not "catching up" to something the
+reference validates its results with, since the reference's own headline
+numbers never depended on age either. It's a genuine, real pattern in
+Atlanta data that the reference happened to anticipate in code it wrote
+and then didn't use. Decision: leave it as a documented empirical result
+(this section) rather than build any of the wiring options above into the
+live model -- there's no reference precedent forcing the choice, and it
+avoids creating a second LTV-determining mechanism alongside EQ17's
+down-payment draw.
