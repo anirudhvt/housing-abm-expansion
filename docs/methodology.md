@@ -947,12 +947,61 @@ with zero income dependence -- currently *any* household is equally likely
 to become a landlord regardless of income, which this data says is wrong
 by roughly 20x (3% at the bottom decile vs. 60% at the top).
 
-None of the four findings above have been wired into `baseline_params.yaml`
-or the model's code. Age distribution and income-given-age would each be a
-genuine structural upgrade (replacing an analytic approximation / a flat
-draw with a real empirical target) but touch initialization code paths
-this session didn't have scope to modify carefully. The EQ1 dispersion
-finding has a live unit-reconciliation step before `alpha` is usable. The
-investor-propensity finding is the one with both real reference precedent
-and no unit ambiguity (it's a probability, not a rescaled quantity) --
-the most actionable of the four if a follow-up session picks this back up.
+Of the four findings, only investor propensity had both real reference
+precedent and no unit ambiguity to resolve first (it's a probability, not
+a rescaled quantity) -- age distribution and income-given-age would each
+be a genuine structural upgrade but touch initialization code paths beyond
+this session's scope to modify carefully, and the EQ1 dispersion finding
+needs its unit mismatch reconciled before `alpha` is usable. So this one
+was actually wired in; the other three remain findings only.
+
+## 12. Wiring investor propensity into small-landlord selection
+
+`SmallLandlord` agents are created in two places -- the initial population
+(`AtlantaHousingModel.__init__`) and a monthly top-up
+(`construction.run_investor_replenishment`, which tops both small-landlord
+and institutional-investor counts back up to their target share of
+households every month, an existing mechanism this session hadn't seen
+until now). Both previously drew each new landlord's income from its own
+disconnected lognormal (`small_landlord_lognormal_mean/sigma`, 9.8/0.5,
+"landlords skew higher-income than renters" -- unexplained, hand-picked).
+
+New `equations/investor_propensity.py`: landlord incomes are now drawn from
+the *same* household income distribution as everyone else, then *selected*
+without replacement, weighted by the real SCF income-decile propensity
+curve from Section 11 (`sample_landlord_incomes`). The realistic income
+skew now falls out of who gets selected instead of being asserted as a
+separate distribution. Both call sites (`model.py`'s initial population,
+`construction.py`'s replenishment) now share this one function instead of
+duplicating the draw. `small_landlord_lognormal_mean/sigma` is removed from
+`config/baseline_params.yaml` as dead config.
+
+Institutional investors are untouched -- SCF surveys households, not
+LLCs/funds, so it has nothing to say about institutional counts, which
+keep their own existing calibration (Section 9's tier-5 finding: no free
+survey analogue exists for institutional-ownership data).
+
+**Verification, not just "it runs":**
+- 8 new unit tests (`tests/test_investor_propensity.py`) pin the selection
+  weighting (low/high income map to the correct decile, a flat curve gives
+  uniform weight) and the sampling mechanics (exact count returned, handles
+  a pool smaller than requested, a real propensity curve measurably skews
+  the selected sample's mean income above flat/uniform selection).
+- A smoke run (N=600, seed=1) confirms the new mechanism actually changes
+  the outcome in the expected direction without breaking anything: selected
+  landlords' median income is $127,749/yr vs. the general population's
+  $65,568/yr (landlords still skew higher-income, as expected) but well
+  below the old hand-picked distribution's $216,410/yr median -- less
+  extreme because it's now a realistic mixture across deciles instead of
+  an assumption. Replenishment was confirmed still working (35 -> 37
+  landlords over 24 months as the household base grew).
+- Ran `validate_against_paper.py` before and after (`git stash`/`pop`) to
+  separate this change's effect from pre-existing issues: 5/7 targets met
+  both times, identical two failures both times
+  (`homeownership_rate`, `annual_appreciation_g` -- both already-documented
+  open issues, unrelated to this change, from the price-formation port's
+  residual appreciation drift and the never-yet-rerun post-fix policy
+  study). `institutional_share_of_rentals` stayed comfortably in range
+  (0.254 -> 0.265), confirming the already-validated investor-share
+  calibration wasn't disturbed by changing *who* gets selected as a
+  landlord.

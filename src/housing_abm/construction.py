@@ -10,6 +10,7 @@ from housing_abm.agents.institutional_investor import InstitutionalInvestor
 from housing_abm.agents.renter import Renter
 from housing_abm.agents.repeat_buyer import RepeatBuyer
 from housing_abm.agents.small_landlord import SmallLandlord
+from housing_abm.equations.investor_propensity import sample_landlord_incomes
 
 HOUSEHOLD_TYPES = (Renter, FirstTimeBuyer, RepeatBuyer, SmallLandlord)
 
@@ -36,17 +37,24 @@ def run_investor_replenishment(model):
  
     n_small_landlords = sum(1 for a in model.agents if isinstance(a, SmallLandlord))
     target_small_landlords = round(n_households * sim_cfg.get("small_landlord_fraction", 0.0))
-    for _ in range(target_small_landlords - n_small_landlords): #fill in gap with normal landlords
+    gap = target_small_landlords - n_small_landlords
+    if gap > 0:
         income_cfg = model.params.get("income_distribution", {})
-        income = float(
-            model.random_gen.lognormal(
-                mean=income_cfg.get("small_landlord_lognormal_mean", 9.8),
-                sigma=income_cfg.get("small_landlord_lognormal_sigma", 0.5),
-            )
+        propensity_cfg = model.params.get("investor_propensity_eq", {})
+        landlord_incomes = sample_landlord_incomes(
+            model.random_gen,
+            n_landlords=gap,
+            pool_size=n_households,
+            decile_probs=propensity_cfg.get(
+                "small_landlord_income_decile_probs", [0.1] * 10
+            ),
+            income_lognormal_mean=income_cfg.get("household_lognormal_mean", 8.6),
+            income_lognormal_sigma=income_cfg.get("household_lognormal_sigma", 0.65),
         )
-        age = int(model.random_gen.integers(30, 70))
-        landlord = SmallLandlord(model=model, income=income, age=age, tract_id="tract_001")
-        landlord.bank_balance = float(model.random_gen.lognormal(mean=11.5, sigma=0.6))
+        for income in landlord_incomes:  # fill in gap with realistically-selected landlords
+            age = int(model.random_gen.integers(30, 70))
+            landlord = SmallLandlord(model=model, income=float(income), age=age, tract_id="tract_001")
+            landlord.bank_balance = float(model.random_gen.lognormal(mean=11.5, sigma=0.6))
  
     n_institutional_investors = sum(
         1 for a in model.agents if isinstance(a, InstitutionalInvestor)

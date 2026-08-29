@@ -242,8 +242,27 @@ income_distribution:
   # in every reported outcome that had nothing to do with any policy.
   household_lognormal_mean: 8.6
   household_lognormal_sigma: 0.65
-  small_landlord_lognormal_mean: 9.8
-  small_landlord_lognormal_sigma: 0.5
+
+investor_propensity_eq:
+  # P(household owns other residential real estate | income decile), fit
+  # from the 2022 SCF Summary Extract Public Data (scripts/calibrate_scf.py,
+  # see docs/methodology.md Section 11/12) -- the direct US analogue of the
+  # reference Java model's WAS-derived BTLProbability curve
+  # (BTLProbability.getBinAt(incomePercentile), genuinely live in the
+  # reference's HouseholdBehaviour.java, unlike decideLTV). SCF surveys
+  # households, not LLCs/funds, so this only grounds small-landlord
+  # selection -- institutional investor counts have no survey analogue and
+  # keep their own separate calibration.
+  #
+  # Replaces the previous small_landlord_lognormal_mean/sigma (9.8, 0.5) --
+  # a disconnected, hand-picked "landlords skew higher-income" assumption.
+  # Landlord incomes are now drawn from the same household income
+  # distribution as everyone else, then selected without replacement
+  # weighted by this curve (equations/investor_propensity.py) -- the
+  # realistic income skew falls out of who gets selected, rather than being
+  # asserted as a separate distribution.
+  small_landlord_income_decile_probs:
+    [0.0297, 0.0379, 0.0745, 0.0811, 0.1375, 0.1308, 0.1294, 0.3209, 0.4298, 0.5987]
 
 household_budget:
   #netted out before considering disposable income

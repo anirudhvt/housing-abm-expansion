@@ -18,6 +18,7 @@ from housing_abm.agents.repeat_buyer import RepeatBuyer
 from housing_abm.agents.small_landlord import SmallLandlord
 from housing_abm.agents.institutional_investor import InstitutionalInvestor
 from housing_abm.external_data import load_g_series, load_monthly_growth_series
+from housing_abm.equations.investor_propensity import sample_landlord_incomes
 from housing_abm.markets.ownership_market import (
     generate_placeholder_sale_stock,
     run_ownership_market,
@@ -266,21 +267,25 @@ class AtlantaHousingModel(Model):
             )  # default initialization
 
         # create small landlord and institutional investor populations
-        # TODO: replace placeholder counts/wealth draws with calibrated Atlanta investor shares
         n_small_landlords = round(
-            n_households 
+            n_households
             * self.params.get("simulation", {}).get("small_landlord_fraction", 0.0)
         )
-        for _ in range(n_small_landlords):
-            income = float(
-                self.random_gen.lognormal(
-                    mean=income_cfg.get("small_landlord_lognormal_mean", 9.8),
-                    sigma=income_cfg.get("small_landlord_lognormal_sigma", 0.5),
-                )
-            )  # landlords skew higher-income than renters
+        propensity_cfg = self.params.get("investor_propensity_eq", {})
+        landlord_incomes = sample_landlord_incomes(
+            self.random_gen,
+            n_landlords=n_small_landlords,
+            pool_size=n_households,
+            decile_probs=propensity_cfg.get(
+                "small_landlord_income_decile_probs", [0.1] * 10
+            ),
+            income_lognormal_mean=income_cfg.get("household_lognormal_mean", 8.6),
+            income_lognormal_sigma=income_cfg.get("household_lognormal_sigma", 0.65),
+        )
+        for income in landlord_incomes:
             age = int(self.random_gen.integers(30, 70))
             landlord = SmallLandlord(
-                model=self, income=income, age=age, tract_id="tract_001"
+                model=self, income=float(income), age=age, tract_id="tract_001"
             )
             landlord.bank_balance = float(
                 self.random_gen.lognormal(mean=11.5, sigma=0.6)
