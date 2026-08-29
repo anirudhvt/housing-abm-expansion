@@ -860,3 +860,99 @@ and then didn't use. Decision: leave it as a documented empirical result
 live model -- there's no reference precedent forcing the choice, and it
 avoids creating a second LTV-determining mechanism alongside EQ17's
 down-payment draw.
+
+## 11. Grounding from the Survey of Consumer Finances (SCF)
+
+The reference model's single richest calibration source is the UK Wealth
+and Assets Survey (WAS), which grounds four separate parameters -- age
+distribution, income-given-age, wealth-given-income, and buy-to-let
+propensity by income percentile -- from one panel, because one survey asks
+all of those questions of the same households. The US analogue is the
+Federal Reserve's Survey of Consumer Finances (SCF); `scripts/calibrate_scf.py`
+fits the same four things from the 2022 wave's Summary Extract Public Data
+(`SCFP2022.csv`, 4,595 households, implicate 1 of 5 used -- a standard
+simplification for building a population-level distribution rather than
+full multiple-imputation variance estimation).
+
+**Age distribution.** The model currently has no empirical age target at
+all -- `demographics.stationary_age_distribution` is a purely analytic
+steady state derived from the mortality hazard, with no survey behind it
+(see Section 4/6). Compared against the real SCF-weighted distribution:
+
+| Age | Analytic (model) | SCF (real) |
+|---|---|---|
+| 18-25 | 0.9% | 4.5% |
+| 25-35 | 12.2% | 15.5% |
+| 35-45 | 18.6% | 17.0% |
+| 45-55 | 18.5% | 16.4% |
+| 55-65 | 18.2% | 18.5% |
+| 65-75 | 16.9% | 16.1% |
+| 75+ | 14.7% | 12.0% |
+
+Middle and older ages track reasonably well; the analytic approximation
+substantially underrepresents the youngest bracket (0.9% vs. a real 4.5%,
+a 5x gap) and modestly overrepresents 75+.
+
+**Income given age.** The model draws every household's income -- initial
+cohort and every later entrant alike -- from one age-independent
+`lognormal(8.6, 0.65)` (median ~$65k/year). Real median household income
+by age is a clear hump: $32k (<25) -> $75k (25-34) -> peaks around $85-90k
+(35-64) -> declines to $49k (75+). The model's single flat draw compresses
+a roughly 3x lifecycle swing into one number.
+
+**EQ1 (wealth-given-income).** `desired_bank_balance`'s functional form is
+`ln(w) = alpha + beta*ln(income) + epsilon`. Fit against SCF `FIN` (total
+financial assets -- readily liquidated wealth, unlike `NETWORTH` which
+includes illiquid home/business equity a household wouldn't draw on for a
+down payment):
+
+| | Config | SCF fit |
+|---|---|---|
+| renter: alpha, beta, eps_std | 0.693, 1.0, 0.3 | -10.69, 1.77, 2.48 (n=1438, R2=0.34) |
+| owner (FTB+repeat combined): alpha, beta, eps_std | -- | -7.70, 1.65, 2.00 (n=2082, R2=0.54) |
+| small_landlord: alpha, beta, eps_std | 3.178, 1.0, 0.3 | -1.49, 1.19, 1.65 (n=1074, R2=0.65) |
+
+`alpha` isn't directly comparable -- config's income is monthly, SCF's is
+annual, and log-linear intercepts shift under that rescaling (`beta` and
+`epsilon_std` don't: rescaling income by a constant only shifts alpha).
+Those two are the meaningful, unit-independent findings, and both say the
+same thing: **config assumes wealth is a tight, exactly-proportional
+function of income (beta=1.0 for every group, eps_std=0.3) that real data
+doesn't support.** Real beta is 1.19-1.77 (wealth grows *faster* than
+proportionally with income -- consistent with the standard finding that
+wealth-income elasticity exceeds 1), and real eps_std is 1.65-2.48, roughly
+6-8x the config's assumed dispersion -- income explains much less of
+wealth than the model currently assumes. SCF has no first-time-vs-repeat
+flag (same limitation as HMDA in 10a), so owner-occupiers are one combined
+fit here, not split like the config's two separate blocks.
+
+**Investor propensity by income (the strongest candidate for actually
+wiring in).** `HORESRE` (owns other residential real estate) is the direct
+US analogue of WAS's rental-income question, and by construction can only
+capture "mom and pop" landlords -- SCF surveys households, not LLCs/REITs,
+consistent with the earlier finding that institutional-investor share has
+no free survey analogue. The income gradient is stark and monotonic:
+
+| Income decile | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| P(owns other residential RE) | 3.0% | 3.8% | 7.5% | 8.1% | 13.8% | 13.1% | 12.9% | 32.1% | 43.0% | 59.9% |
+
+Unlike `decideLTV` (Section 10c), this one has real reference precedent:
+`BTLProbability.getBinAt(incomePercentile)` runs in every household's
+constructor in the reference's live code (`HouseholdBehaviour.java`), not
+commented out -- the reference's actual reported results depend on this
+mechanism. Atlanta's `small_landlord_fraction`/`institutional_investor_fraction`
+(`config/baseline_params.yaml` `simulation`) are fixed population fractions
+with zero income dependence -- currently *any* household is equally likely
+to become a landlord regardless of income, which this data says is wrong
+by roughly 20x (3% at the bottom decile vs. 60% at the top).
+
+None of the four findings above have been wired into `baseline_params.yaml`
+or the model's code. Age distribution and income-given-age would each be a
+genuine structural upgrade (replacing an analytic approximation / a flat
+draw with a real empirical target) but touch initialization code paths
+this session didn't have scope to modify carefully. The EQ1 dispersion
+finding has a live unit-reconciliation step before `alpha` is usable. The
+investor-propensity finding is the one with both real reference precedent
+and no unit ambiguity (it's a probability, not a rescaled quantity) --
+the most actionable of the four if a follow-up session picks this back up.
