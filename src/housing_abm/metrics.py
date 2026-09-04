@@ -37,6 +37,7 @@ SECONDARY_METRICS = (
     "investor_share_of_stock",
     "median_price",
     "median_rent",
+    "price_per_quality",
     "n_households",
     "months_of_inventory",
     "median_months_on_market",
@@ -131,6 +132,10 @@ def observe(model) -> dict:
         "n_purchases_total": float(sum(model.purchases_this_month.values())),
         "median_price": float(np.median(prices)) if prices else None,
         "median_rent": float(np.median(rents)) if rents else None,
+        # the tract's own smoothed price index -- the cleanest series to read
+        # a price *trend* off, since it isn't re-sampled from whichever units
+        # happen to be listed this month (see price_cagr in window_means)
+        "price_per_quality": float(model.tracts["tract_001"].price_per_quality),
         "n_households": float(model.n_household_agents()),
         "months_of_inventory": (len(listings) / sales) if sales else None,
         "median_months_on_market": (
@@ -150,8 +155,40 @@ def run_window(model, months: int) -> dict[str, list]:
     return series
 
 
+def price_trend_cagr(prices: list) -> float | None:
+    """Annualised price growth, as the OLS slope of log(price) on month index.
+
+    `annual_appreciation_g` is the *mean over months* of EQ4's ratio-based
+    trailing growth, which is the right quantity for agent behaviour (it is
+    what households actually perceive and act on) but a biased estimator of
+    the underlying trend. On a volatile mean-reverting series, growth ratios
+    are asymmetric: a rise from A to B reads as +(B-A)/A, while the matching
+    fall back to A reads as -(B-A)/B, which is smaller in magnitude. Averaged
+    over up-and-down cycles that yields a positive number even at zero net
+    trend, and the bias grows with volatility.
+
+    Measured at 300 households over a 180-month window, the gap is large and
+    one-directional: the mean of monthly EQ4 g came to +3.75%/yr against an
+    actual price CAGR of +0.99%/yr, overstating by +2.76%/yr in every one of
+    8 seeds (in two of them the price level *fell* over the window while the
+    metric still reported ~+3%/yr). So a trend target has to be validated
+    against a trend estimator, not against the behavioural signal.
+
+    Uses the log-OLS slope rather than an endpoint-to-endpoint CAGR, since it
+    uses the whole window instead of two noisy endpoint observations.
+    """
+    clean = [p for p in prices if p is not None and not np.isnan(p) and p > 0]
+    if len(clean) < 24:
+        return None
+    y = np.log(np.asarray(clean, dtype=float))
+    x = np.arange(len(y), dtype=float)
+    monthly_slope = float(np.polyfit(x, y, 1)[0])
+    return float(np.exp(monthly_slope * 12) - 1)
+
+
 def window_means(series: dict[str, list]) -> dict[str, float | None]:
-    """Window summary: means for levels, pooled ratios for count ratios."""
+    """Window summary: means for levels, pooled ratios for count ratios, and
+    a log-OLS trend for price growth (see price_trend_cagr)."""
     out: dict[str, float | None] = {}
     for name, values in series.items():
         clean = [v for v in values if v is not None and not np.isnan(v)]
@@ -161,6 +198,8 @@ def window_means(series: dict[str, list]) -> dict[str, float | None]:
         numerator = float(np.nansum(np.asarray(series[num_key], dtype=float)))
         denominator = float(np.nansum(np.asarray(series[den_key], dtype=float)))
         out[name] = numerator / denominator if denominator > 0 else None
+
+    out["price_cagr"] = price_trend_cagr(series.get("price_per_quality", []))
     return out
 
 

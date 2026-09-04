@@ -44,6 +44,17 @@ def _appreciation_target():
     The band used here is long-run *real* US house price growth, which is the
     like-for-like comparison for a stationary model with no price trend built
     in. The nominal Case-Shiller figures are still printed for context.
+
+    Checked against `price_cagr` (the log-OLS trend of the tract's smoothed
+    price series), not `annual_appreciation_g` (the mean over months of EQ4's
+    ratio-based trailing growth). Both are meaningful, but they measure
+    different things: EQ4's g is the behavioural signal agents act on, and on
+    a volatile mean-reverting series its monthly mean is a biased estimator
+    of the trend -- measured at +3.75%/yr against an actual +0.99%/yr CAGR,
+    overstating in all 8 seeds tested, including two where the price level
+    fell over the window while g still read ~+3%/yr. See
+    housing_abm.metrics.price_trend_cagr. A trend band needs a trend
+    estimator; EQ4 itself is unchanged and still reported below.
     """
     note = "long-run real US house price growth (Shiller); model has no inflation"
     try:
@@ -93,7 +104,7 @@ TARGETS = [
         0.40,
         "institutional operators hold roughly 30% of metro Atlanta SFR",
     ),
-    ("annual_appreciation_g", *_appreciation_target()),
+    ("price_cagr", *_appreciation_target()),
     (
         "months_of_inventory",
         1.0,

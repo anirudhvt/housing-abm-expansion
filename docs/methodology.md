@@ -1005,3 +1005,63 @@ survey analogue exists for institutional-ownership data).
   (0.254 -> 0.265), confirming the already-validated investor-share
   calibration wasn't disturbed by changing *who* gets selected as a
   landlord.
+
+## 13. The appreciation target was failing on a biased estimator, not on model behaviour
+
+`annual_appreciation_g` sat outside its validation band (+3.9%/yr against a
+target of [-0.01, 0.02]) from the price-formation port onward, and was
+carried as an open "residual appreciation drift" issue. Two candidate
+fixes were assumed: strengthen the price-reversion constant
+(`market_smoothing.market_average_price_decay`) or weaken EQ3's demand-side
+appreciation feedback (`expenditure_eq3.beta`). Both were swept before
+being adopted, and neither worked:
+
+| variant | appreciation | homeownership |
+|---|---|---|
+| baseline (decay 0.5, beta 0.3) | 0.039 | 0.391 |
+| decay 0.3 | 0.040 | 0.399 |
+| decay 0.2 | 0.033 | 0.390 |
+| beta 0.15 | **0.049** | 0.432 |
+| beta 0.10 | **0.045** | 0.422 |
+| decay 0.3 + beta 0.15 | 0.042 | 0.386 |
+
+Stronger reversion barely moved it; weakening EQ3's feedback made it
+*worse*, the opposite of the predicted direction. That ruled out both
+stated hypotheses and prompted instrumenting an actual run instead.
+
+**What the instrumented run showed.** Over 180 months at 300 households:
+housing stock never changed (construction correctly idle -- houses per
+household stayed above its 1.098 build trigger the whole time), mean
+household income was flat (7,530 -> 7,527, so the earlier income-drift fix
+is holding), and the price level oscillated between ~373k and ~516k with
+little net trend -- while the metric still reported ~4%/yr. Those two facts
+are inconsistent, which located the problem in the measurement.
+
+**The bias, quantified.** Across 8 seeds, the mean of monthly EQ4 g came to
+**+3.75%/yr against an actual price CAGR of +0.99%/yr** -- overstating by
+**+2.76%/yr, positive in every single seed** (range +2.04 to +4.17pp). In
+two seeds the price level *fell* over the window (-0.54%/yr, -0.72%/yr)
+while the metric still read ~+3%/yr.
+
+The cause is ratio asymmetry. EQ4's g is a growth *ratio*, and its monthly
+mean is taken over a volatile mean-reverting series: a rise from A to B
+reads as +(B-A)/A, while the matching fall back to A reads as -(B-A)/B,
+smaller in magnitude. Averaged over up-and-down cycles that yields a
+positive number at zero net trend, and the bias scales with volatility --
+sd(g) is ~0.08-0.09 in this thin market, exactly the regime where it bites.
+
+**Fix.** Added `housing_abm.metrics.price_trend_cagr`: the annualised
+log-OLS slope of the tract's smoothed price series (log-OLS rather than
+endpoint-to-endpoint CAGR, so it uses the whole window instead of two noisy
+endpoints), surfaced as `price_cagr`. `validate_against_paper.py` now
+checks the trend band against that. **EQ4 itself is unchanged** -- its g is
+the behavioural signal households actually perceive and act on, which is
+its real job, and it is still reported. What changed is only that a trend
+target is now validated against a trend estimator. 7 tests pin the
+estimator (recovers known growth and decline rates, returns None on too
+short a window, and does not manufacture a trend from mean-reverting
+noise).
+
+**Result: 6/7 validation targets met**, with `price_cagr` at 0.015
+[0.002, 0.027] against [-0.01, 0.02]. `homeownership_rate` (0.402 against
+[0.48, 0.60]) is now the only remaining gap.
