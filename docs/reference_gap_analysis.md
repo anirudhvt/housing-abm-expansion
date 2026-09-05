@@ -432,3 +432,88 @@ genuinely good science:
 
 The current model cannot yet support the claim the project wants to make.
 Stage 1 is what makes it able to.
+
+---
+
+## Part 7 — Stage 1 progress
+
+### Done: rent price discovery (Problem 1)
+
+`Tract.record_letting` / `Tract.update_rent_history` now mirror
+`record_sale` / `update_hpi_history` exactly — two-stage EMA plus reversion
+to a `reference_rent_per_quality` anchor, with an EMA'd `rent_index` guarding
+the same double-counting failure the price side had. `_settle_lease` records
+every completed letting; `model.step()` forms the rent signal after the
+rental market clears. Rent went from **exactly one value across 240 months**
+to 217 distinct values.
+
+Two further reference gaps surfaced while building it:
+
+- **No downward force on rents.** The reference (3.4.4) cuts demanded rent 5%
+  for every month a unit sits unfilled — the rental analogue of EQ8. We had
+  no equivalent: bid-up pushed rents up, EQ11's noise is zero-mean, so once
+  rents were endogenous the level ratcheted to **3.4x the anchor with a 22.5%
+  gross yield**. Added as `rental_market.vacant_rent_reduction`.
+- **EQ11 was reading the wrong `f_bar`.** `small_landlord` passed
+  `avg_days_on_market()` — the *ownership* market's days — where the
+  reference is explicit that EQ11's `f_bar` is days on the *rental* market.
+  Now `avg_days_vacant()`.
+
+**The mechanism is unbiased.** Sweeping rental supply, rent responds
+monotonically and lands almost exactly on the calibrated ZORI anchor at a
+realistic vacancy rate:
+
+| units/household | vacancy | rent vs. anchor |
+|---|---|---|
+| 0.5 | 2.7% | 1.95x |
+| 0.7 | 2.7% | 1.66x |
+| **0.9** | **8.9%** | **0.93x** |
+| 1.1 | 16.0% | 0.62x |
+
+### Done: signed `g` in EQ5 (Problem 5)
+
+`max(g, 0)` removed; falling prices now raise the cost of owning as the
+reference intends.
+
+### Result
+
+**Validation went from 6/7 to 7/7 at experiment scale (N=600, 8 seeds)** —
+and not by tuning toward the targets. `rental_vacancy_rate` was the failing
+target at 0.037; it is now 0.069 (real Atlanta: 7.3%) purely because rents
+can finally clear the market.
+
+The expectations-channel ablation also strengthened. Forcing `g = 0`:
+
+| | before Stage 1 | after Stage 1 |
+|---|---|---|
+| baseline sd(qtr growth) | 5.14% | 4.91% |
+| `g = 0` sd(qtr growth) | 4.92% | 4.07% |
+| **gap** | **0.22pp (4%)** | **0.84pp (17%)** |
+
+The channel now does roughly 4x more work, because EQ5 responds on both the
+rent and price sides. It is still far from the reference's "cycles almost
+completely disappear," and volatility is still 4.91% against a real Atlanta
+1.70% — that is Problem 2, and it is Stage 2's job.
+
+### Not fixed: Problem 4 still runs backwards
+
+Re-measured after the above, the comparative static is still wrong:
+
+| Institutional share | Price | Rent | Homeownership | FTB share |
+|---|---|---|---|---|
+| 0.0% | 260,059 | 2,183 | 0.542 | 0.255 |
+| 1.25% | 249,503 | 2,082 | 0.509 | 0.231 |
+| 5.0% | 243,485 | 1,954 | 0.509 | 0.257 |
+| 10.0% | 210,501 | 2,667 | **0.571** | **0.389** |
+
+This is expected: Problem 4 is downstream of Problem 3, and **Stage 1 item 2
+(investor sector as a sustained flow) is not done** — it needs the Redfin
+investor-purchase-share target to calibrate against.
+
+Rent discovery in fact made Problem 3 *more* visible rather than fixing it.
+Holding total housing stock fixed and varying only the rental/ownership
+split barely moves vacancy (1.7% → 3.6% across a wide range), because the
+rental sector bleeds supply as investors sell down (242 → 188 units over 240
+months). The frozen rent was concealing a genuinely starved rental market;
+now it shows up as an elevated rent level. That is the same Problem 3 seen
+from a new angle, and it is the next thing to fix.

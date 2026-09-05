@@ -132,6 +132,11 @@ market_smoothing:
   # blending in the reversion term. At 0.5, half the gap between the smoothed
   # price and the reference-implied level closes every month.
   market_average_price_decay: 0.5
+  # Rent-side equivalent, applied by Tract.update_rent_history. Same value as
+  # the price side: the reference uses one relaxation constant for its market
+  # price series and the rental market is cleared by the same mechanism, so
+  # there is no reason for the two to differ until data says otherwise.
+  market_average_rent_decay: 0.5
 
 price_reduction_eq8:
   reduction_prob: 0.055
@@ -139,6 +144,15 @@ price_reduction_eq8:
   vacancy_tax_multiplier_investor: 1.5 #investor-held vacant listings reprice faster
 
 rental_market:
+  # Reference section 3.4.4: "If a house on the rental market does not get
+  # filled, the price is reduced each month by a constant fraction of 5%."
+  # This is the rental analogue of EQ8's sale-market price reduction, and it
+  # is the only downward force on rents -- bid-up on contested units pushes
+  # rents up, and EQ11's noise is zero-mean, so without this the rent level
+  # ratchets upward without bound once rents are formed endogenously
+  # (measured: 3.4x the calibrated anchor, 22.5% gross yield, before this
+  # was added). See docs/reference_gap_analysis.md Problem 1.
+  vacant_rent_reduction: 0.05
   # frictional void between tenancies: a vacated unit needs cleaning, repair and
   # marketing before it can be re-let. With no void, turnover produces zero
   # measured vacancy because the rental market re-lets a unit in the same month

@@ -67,7 +67,12 @@ class SmallLandlord(HouseholdAgent):
                 tract = self.model.tracts[unit.tract_id]
                 unit.rent = small_landlord_rent(
                     r_bar_tract=tract.rent_per_quality * unit.quality,
-                    f_bar_tract=tract.avg_days_on_market(),
+                    # EQ11's f_bar is days on the *rental* market, not the
+                    # ownership market -- the reference is explicit about this
+                    # ("f_bar is the number of days in the rental market,
+                    # rather than in the ownership market"). This previously
+                    # passed avg_days_on_market().
+                    f_bar_tract=tract.avg_days_vacant(),
                     alpha=cfg["alpha"],
                     beta=cfg["beta"],
                     zeta=cfg["zeta"],

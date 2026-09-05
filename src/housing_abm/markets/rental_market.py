@@ -48,6 +48,12 @@ def generate_placeholder_rental_stock(
 
 def _settle_lease(model, unit, winner, final_rent):
     """Assign house to winner and start a lease"""
+    # the rent-side mirror of _settle_purchase's record_sale: this is the only
+    # place a letting actually completes, so it is where the rental market's
+    # price signal has to be formed (see Tract.update_rent_history)
+    model.tracts[unit.tract_id].record_letting(
+        rent=final_rent, quality=unit.quality, days_vacant=unit.day_vacant
+    )
     unit.rent = final_rent
     unit.tenant = winner
     unit.on_rental_market = False
@@ -64,8 +70,15 @@ def _settle_lease(model, unit, winner, final_rent):
 
 def run_rental_market(model):
     """Multi round double auction clearing of queued renters"""
+    reduction = model.params.get("rental_market", {}).get("vacant_rent_reduction", 0.0)
     for unit in model.rental_units:
         if unit.tenant is None and unit.on_rental_market:
+            # a unit that already sat unfilled last month cuts its asking rent
+            # (reference 3.4.4, the rental analogue of EQ8). Applied before the
+            # counter increments so a freshly-listed unit gets one clear month
+            # at its EQ11 asking rent first.
+            if reduction and unit.day_vacant > 0 and unit.rent:
+                unit.rent *= 1.0 - reduction
             unit.day_vacant += 1
 
     # a unit still inside its void period counts as vacant stock but is not

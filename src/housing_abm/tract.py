@@ -3,6 +3,16 @@
 Price formation follows the reference Java model (Baptista et al. 2016,
 HousingMarketStats.java): a two-stage smoothed price series rather than a raw
 overwrite from recent transactions. See Tract.update_hpi_history for why.
+
+Rent formation mirrors it exactly -- see Tract.update_rent_history. Before
+that existed, rent_per_quality was set once from config and never updated by
+the rental market: across 240 simulated months it took exactly one value,
+while actual unit rents in the same run ranged 740-7,846. Since that frozen
+number is the market signal read by EQ5's buy-vs-rent decision, EQ9/12's
+investor yield, EQ11's rent setting and the investor yield ranking, the
+reference's stabilising loop (investors buy -> rental supply up -> rents
+fall -> renting more attractive) could not operate at all. See
+docs/reference_gap_analysis.md Problem 1.
 """
 
 
@@ -16,8 +26,10 @@ class Tract:
         external_g_series: list[float] | None = None,
         external_rent_growth_series: list[float] | None = None,
         reference_price_per_quality: float | None = None,
+        reference_rent_per_quality: float | None = None,
         smoothing_factor: float = 0.1091,
         price_decay: float = 0.5,
+        rent_decay: float = 0.5,
     ):
         self.tract_id = tract_id
         self.price_per_quality = price_per_quality
@@ -48,12 +60,27 @@ class Tract:
         # where these values come from.
         self.smoothing_factor = smoothing_factor
         self.price_decay = price_decay
+        self.rent_decay = rent_decay
+
+        # Rent-side mirrors of the three price fields above: a fixed
+        # calibrated anchor, an index of actual-to-reference transacted rent,
+        # and the smoothed series agents actually read.
+        self.reference_rent_per_quality = (
+            reference_rent_per_quality
+            if reference_rent_per_quality is not None
+            else rent_per_quality
+        )
+        self.rent_index = 1.0
+        self.rent_history = [rent_per_quality] * 15
 
         # This month's completed sales (price, quality), consumed and reset
         # each time update_hpi_history runs. Distinct from
         # recent_days_on_market below, which tracks a longer trailing window.
         self._monthly_sales: list[tuple[float, float]] = []
         self.recent_days_on_market = []  # trailing window, days on market for recent sales
+        # rent-side equivalents, consumed by update_rent_history
+        self._monthly_lettings: list[tuple[float, float]] = []
+        self.recent_days_vacant = []  # trailing window, days-to-let for recent lettings
 
         #real world ZHVI/ZORI series
         self.external_g_series = external_g_series
@@ -88,6 +115,29 @@ class Tract:
         return sum(self.recent_days_on_market) / len(
             self.recent_days_on_market
         )  # average
+
+    def record_letting(
+        self, rent: float, quality: float, days_vacant: float, window: int = 60
+    ):
+        """Record a completed letting -- the rent-side mirror of record_sale.
+
+        Feeds update_rent_history's EMA and the trailing days-to-let window
+        that EQ11 uses as its f_bar (the reference is explicit that EQ11's
+        f_bar is days on the *rental* market, not the ownership market).
+        """
+        self._monthly_lettings.append((rent, quality))
+        self.recent_days_vacant.append(days_vacant)
+        self.recent_days_vacant = self.recent_days_vacant[-window:]
+
+    def market_rent(self, quality: float) -> float:
+        """Current smoothed market rent for a house of the given quality --
+        the rent-side mirror of avg_sold_price."""
+        return self.rent_per_quality * quality
+
+    def avg_days_vacant(self) -> float:
+        if not self.recent_days_vacant:
+            return 30.0  # default placeholder, matches avg_days_on_market
+        return sum(self.recent_days_vacant) / len(self.recent_days_vacant)
 
     def update_hpi_history(self, window: int = 24):
         """Update the smoothed price level and appreciation history.
@@ -154,13 +204,67 @@ class Tract:
         self.hpi_history.append(self.price_per_quality)
         self.hpi_history = self.hpi_history[-window:]
 
-        if self.external_rent_growth_series:
-            idx = self._rent_growth_index % len(self.external_rent_growth_series) #repeat/cycle data when finished
-            self.rent_per_quality *= 1.0 + self.external_rent_growth_series[idx]
-            self._rent_growth_index += 1
- 
         if self.external_g_series:
             self._g_index += 1
+
+    def update_rent_history(self, window: int = 24):
+        """Update the smoothed rent level from this month's completed lettings.
+
+        Exact mirror of update_hpi_history, for the same reasons: stage 1
+        blends this month's realized rents into the smoothed series at
+        smoothing_factor and updates a rent index (actual-to-reference
+        transacted rent, itself EMA'd so one thin month can't set it
+        outright); stage 2 reverts toward reference_rent_per_quality *
+        rent_index every month so the series can't drift arbitrarily far
+        from the calibrated level during a letting drought.
+
+        Call once the rental market has run.
+
+        When an external rent-growth series is configured, that drives the
+        rent level instead and the endogenous update is skipped -- the same
+        override relationship external_g_series has with appreciation_g.
+        """
+        if self.external_rent_growth_series:
+            idx = self._rent_growth_index % len(
+                self.external_rent_growth_series
+            )  # repeat/cycle data when finished
+            self.rent_per_quality *= 1.0 + self.external_rent_growth_series[idx]
+            self._rent_growth_index += 1
+            self._monthly_lettings = []
+            self.rent_history.append(self.rent_per_quality)
+            self.rent_history = self.rent_history[-window:]
+            return
+
+        if self._monthly_lettings:
+            month_avg = sum(r / q for r, q in self._monthly_lettings if q > 0) / len(
+                self._monthly_lettings
+            )
+            self.rent_per_quality = (
+                self.smoothing_factor * month_avg
+                + (1.0 - self.smoothing_factor) * self.rent_per_quality
+            )
+            sum_let_rent = sum(r for r, q in self._monthly_lettings if q > 0)
+            sum_reference_rent = sum(
+                self.reference_rent_per_quality * q
+                for r, q in self._monthly_lettings
+                if q > 0
+            )
+            if sum_reference_rent > 0:
+                monthly_index = sum_let_rent / sum_reference_rent
+                self.rent_index = (
+                    self.smoothing_factor * monthly_index
+                    + (1.0 - self.smoothing_factor) * self.rent_index
+                )
+            self._monthly_lettings = []
+
+        self.rent_per_quality = (
+            self.rent_decay * self.rent_per_quality
+            + (1.0 - self.rent_decay)
+            * (self.rent_index * self.reference_rent_per_quality)
+        )
+
+        self.rent_history.append(self.rent_per_quality)
+        self.rent_history = self.rent_history[-window:]
 
     def appreciation_g(self, alpha: float = 1.0) -> float | None: 
         """EQ 4: trailing appreciation estimate.

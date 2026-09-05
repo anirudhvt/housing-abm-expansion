@@ -163,6 +163,7 @@ class AtlantaHousingModel(Model):
         )
         smoothing_factor = 1.0 - cumulative_weight_beyond_year ** (1.0 / 12.0)
         price_decay = smoothing_cfg.get("market_average_price_decay", 0.5)
+        rent_decay = smoothing_cfg.get("market_average_rent_decay", 0.5)
 
         self.tracts = {
             "tract_001": Tract(
@@ -170,8 +171,10 @@ class AtlantaHousingModel(Model):
                 price_per_quality=reference_price,
                 rent_per_quality=reference_rent,
                 reference_price_per_quality=reference_price,
+                reference_rent_per_quality=reference_rent,
                 smoothing_factor=smoothing_factor,
                 price_decay=price_decay,
+                rent_decay=rent_decay,
                 external_g_series=external_g_series,
                 external_rent_growth_series=external_rent_growth_series,
             )
@@ -449,6 +452,11 @@ class AtlantaHousingModel(Model):
             tract.update_hpi_history()
 
         run_rental_market(self)
+
+        # rent-side mirror of update_hpi_history above: form this month's
+        # rent signal from the lettings that just cleared
+        for tract in self.tracts.values():
+            tract.update_rent_history()
 
         update_ownership_cap_soft_state(self) #roll soft-cap counters
 
