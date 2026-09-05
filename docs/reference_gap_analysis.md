@@ -510,6 +510,65 @@ This is expected: Problem 4 is downstream of Problem 3, and **Stage 1 item 2
 (investor sector as a sustained flow) is not done** — it needs the Redfin
 investor-purchase-share target to calibrate against.
 
+### Root cause of Problem 4 found: the investor dose is confounded with housing supply
+
+Calibrating against Redfin's Atlanta investor-purchase share turned up the
+actual reason the comparative static runs backwards.
+
+**Investors are added to the population, not selected from it.** `model.py`
+creates `n_households` renters and *then* appends
+`n_households x small_landlord_fraction` additional `SmallLandlord` agents.
+`SmallLandlord` is in `construction.HOUSEHOLD_TYPES`, so those extra agents
+count toward the household total that `run_construction` sizes the housing
+stock against (`target_units = 1.098 x n_households`).
+
+So raising the investor dose raises the household count, which raises the
+construction target, which builds more houses:
+
+| Investor dose (x baseline) | Households | Housing stock |
+|---|---|---|
+| 0.0 | 622 | 700 |
+| 1.0 | 678 | 738 |
+| 2.0 | 761 | 816 |
+| 3.0 | 848 | **900** |
+
+A 3x investor dose silently comes with **+36% households and +29% housing
+supply**. Prices fall and homeownership rises because *supply went up*, not
+because of anything investors did. The independent variable is contaminated.
+
+**The reference does not do this.** Its BTL "gene" is assigned to a fixed
+proportion of *existing* households ("a fixed proportion (8%) of households
+that are above the 50th percentile of income are given a BTL 'gene'").
+Population is held constant; only composition changes. That is what makes
+their 4% -> 16% comparative static clean.
+
+The fix is to convert rather than append: select existing households to
+become landlords (the income-percentile selection machinery from §12 is
+already built for exactly this), leaving population and the construction
+target untouched. Blast radius is wide — it changes population semantics,
+so every calibrated number and the 7/7 validation would need re-running.
+
+### Investor purchase share is now calibrated against real data
+
+Redfin Data Center investor-purchase share, Atlanta metro
+(`redfin_investors_by_metro`, 2016Q1–2026Q2, investor = any buyer
+purchasing under a business name, so both mom-and-pop and institutional):
+
+| | Investor share of purchases |
+|---|---|
+| **Atlanta 2019** (our calibration year) | **22.3%** |
+| Atlanta full-sample mean | 21.2% |
+| Atlanta range | 13.2% – 37.6% (peak 2021-22) |
+| Model before Stage 1 | 10.7% |
+| **Model after Stage 1** | **24.1%** |
+
+Rent discovery alone closed most of this gap without touching an investor
+parameter: with `r_bar` frozen, investors' rental-yield signal was dead, so
+EQ9's expected yield could not respond to the rental market. Restoring it
+roughly doubled investor purchase activity, landing close to the real
+figure. Investor holdings still drift down (~-16% over 180 months), which
+the convert-not-append fix above should also address.
+
 Rent discovery in fact made Problem 3 *more* visible rather than fixing it.
 Holding total housing stock fixed and varying only the rental/ownership
 split barely moves vacancy (1.7% → 3.6% across a wide range), because the
