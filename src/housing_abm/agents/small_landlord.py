@@ -11,10 +11,7 @@ from housing_abm.equations.mortgage import down_payment_investor, passes_investo
 from housing_abm.equations.rental_pricing import small_landlord_rent
 from housing_abm.equations.selling import asking_price
 
-from housing_abm.policies.investor_restrictions import (
-    acquisition_price_multiplier,
-    compute_policy_cost,
-)
+from housing_abm.policies.investor_restrictions import compute_policy_cost
 
 from .base import HouseholdAgent
 
@@ -67,11 +64,6 @@ class SmallLandlord(HouseholdAgent):
                 tract = self.model.tracts[unit.tract_id]
                 unit.rent = small_landlord_rent(
                     r_bar_tract=tract.rent_per_quality * unit.quality,
-                    # EQ11's f_bar is days on the *rental* market, not the
-                    # ownership market -- the reference is explicit about this
-                    # ("f_bar is the number of days in the rental market,
-                    # rather than in the ownership market"). This previously
-                    # passed avg_days_on_market().
                     f_bar_tract=tract.avg_days_vacant(),
                     alpha=cfg["alpha"],
                     beta=cfg["beta"],
@@ -126,10 +118,11 @@ class SmallLandlord(HouseholdAgent):
                 unit.price = max(
                     unit.price, unit.mortgage_principal
                 )  # see repeat_buyer.py comment
+                unit.on_sale_market = True
                 unit.on_rental_market = (
                     False  # can't be biddable in both markets at one time
                 )
-                self.model.list_for_sale(unit, seller=self)
+                self.model.queue_listing(unit, seller=self)
 
     def _evaluate_buy_decision(self):
         """EQ 9/10; expected yield -> purchase probability -> bid on ownership market"""
@@ -157,13 +150,9 @@ class SmallLandlord(HouseholdAgent):
             )
         )
 
-        down_payment = min(down_payment, target_price)  # can't pay more than the price
-        # a purchase tax raises the cash required for the same asset (see
-        # acquisition_price_multiplier); the return still accrues on market value
-        tax_multiplier = acquisition_price_multiplier(self.model, self)
-        cash_outlay = down_payment + (tax_multiplier - 1.0) * target_price
-        if self.bank_balance < cash_outlay:
+        if self.bank_balance < down_payment:
             return  # can't afford to purchase this month
+        down_payment = min(down_payment, target_price)  # can't pay more than the price
 
         # evaluate if they can get the loan
         proposed_loan = 0.0 if is_cash else target_price - down_payment
@@ -189,7 +178,7 @@ class SmallLandlord(HouseholdAgent):
 
         omega = expected_yield_buy(
             price=target_price,
-            down_payment=cash_outlay,
+            down_payment=down_payment,
             delta=self.DELTA,
             g=g,
             kappa=yield_cfg["kappa"],
@@ -204,8 +193,5 @@ class SmallLandlord(HouseholdAgent):
             self.model.random_gen.random() < prob_buy
         ):  # chooses to buy, bid on ownership market
             self.model.queue_ownership_bid(
-                self,
-                max_price=target_price,
-                down_payment=down_payment,
-                acquisition_tax=cash_outlay - down_payment,
+                self, max_price=target_price, down_payment=down_payment
             )
