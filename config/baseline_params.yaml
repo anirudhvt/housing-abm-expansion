@@ -2,14 +2,11 @@
 
 simulation:
   n_households: 600
-  # Landlord/investor counts are set so the initial rental stock lands on two
-  # calibration targets at once:
-  #   - institutional investors hold ~30% of the single-family rental stock
-  #     (the metro Atlanta figure cited in the paper)
-  #   - small landlords hold 2-10 units each (the paper's own definition)
-  # With units_per_household 0.5, a 300-household run has 150 rental units:
-  # 45 institutional (~12 each across ~4 investors) and 105 mom-and-pop
-  # (~6 each across ~18 landlords).
+  # SmallLandlords are selected from the household pool (not appended),
+  # weighted by the SCF income-decile propensity curve. Institutional
+  # investors are separate corporate entities outside the household count.
+  # With units_per_household 0.5, a 600-household run has 300 rental units:
+  # 90 institutional and 210 mom-and-pop.
   small_landlord_fraction: 0.058
   institutional_investor_fraction: 0.0125
   use_external_appreciation_data: false

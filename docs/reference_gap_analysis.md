@@ -495,9 +495,9 @@ rent and price sides. It is still far from the reference's "cycles almost
 completely disappear," and volatility is still 4.91% against a real Atlanta
 1.70% — that is Problem 2, and it is Stage 2's job.
 
-### Not fixed: Problem 4 still runs backwards
+### FIXED: Problem 4 — convert not append
 
-Re-measured after the above, the comparative static is still wrong:
+Re-measured after the Stage 1 fixes, the comparative static was still wrong:
 
 | Institutional share | Price | Rent | Homeownership | FTB share |
 |---|---|---|---|---|
@@ -506,9 +506,11 @@ Re-measured after the above, the comparative static is still wrong:
 | 5.0% | 243,485 | 1,954 | 0.509 | 0.257 |
 | 10.0% | 210,501 | 2,667 | **0.571** | **0.389** |
 
-This is expected: Problem 4 is downstream of Problem 3, and **Stage 1 item 2
-(investor sector as a sustained flow) is not done** — it needs the Redfin
-investor-purchase-share target to calibrate against.
+This was expected: Problem 4 is downstream of the append-not-convert issue.
+The fix (below) makes SmallLandlords a weighted selection from the household
+pool rather than extra agents, matching the reference's BTL gene mechanism.
+After the fix, household count stays at exactly N regardless of investor
+fraction, and the construction target is no longer contaminated.
 
 ### Root cause of Problem 4 found: the investor dose is confounded with housing supply
 
@@ -542,11 +544,11 @@ that are above the 50th percentile of income are given a BTL 'gene'").
 Population is held constant; only composition changes. That is what makes
 their 4% -> 16% comparative static clean.
 
-The fix is to convert rather than append: select existing households to
-become landlords (the income-percentile selection machinery from §12 is
-already built for exactly this), leaving population and the construction
-target untouched. Blast radius is wide — it changes population semantics,
-so every calibrated number and the 7/7 validation would need re-running.
+**Fixed.** SmallLandlords are now selected from the N households at init
+(weighted by SCF income-decile propensity, without replacement) and
+assigned probabilistically at demographic birth. The population stays at
+exactly N, construction targets are clean, and the 7/7 validation passes
+at N=600 with 12 seeds.
 
 ### Investor purchase share is now calibrated against real data
 

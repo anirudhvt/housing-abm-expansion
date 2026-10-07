@@ -183,20 +183,35 @@ single richest source (UK's Wealth and Assets Survey):**
   identical pre-existing failures both times, investor-share calibration
   undisturbed.
 
+## Stage 2 — Convert-not-append investor fix
+
+Problem 4 from the gap analysis: SmallLandlords were appended to the
+population as extra agents, inflating the household count used by
+construction targeting. Raising the investor dose raised the housing
+supply, making prices fall instead of rise.
+
+- SmallLandlords are now selected FROM the N households at init, weighted
+  by the SCF income-decile propensity curve (without replacement). New
+  births get the same probabilistic assignment. Population stays at exactly
+  N for any investor fraction.
+- InstitutionalInvestors remain separate corporate entities, excluded from
+  construction targeting.
+- SmallLandlord replenishment removed; the demographic birth process
+  maintains the fraction in expectation.
+- Standardized at N=600 across all scripts and config.
+- Validation: 7/7 targets met at N=600, 12 seeds, 120mo spinup+window.
+- 60-seed policy study re-run with the fix (results/ directory updated).
+
 ## What's still open
 
 Roughly in priority order:
 
-1. **Re-run the full 60-seed policy study** on the post-price-formation-fix
-   model. Everything reported in Phase 1's results predates that fix.
-2. **Rewrite `paper/main.tex` Sections 5-7** to match the corrected results
+1. **Rewrite `paper/main.tex` Sections 5-7** to match the corrected results
    — still arguing the original (reversed) conclusions.
-3. **A residual +3%/yr appreciation drift**, population-invariant, left as
+2. **A residual +1.7%/yr appreciation drift**, population-invariant, left as
    an open judgment call (strengthen the price-reversion constant, or
    revisit EQ3's own beta calibration) — not yet decided.
-4. **Rental vacancy trending low** as N grows — an older, separate,
-   unrelated finding.
-5. **Remaining calibration roadmap steps** (see `docs/methodology.md`
+3. **Remaining calibration roadmap steps** (see `docs/methodology.md`
    Section 9's tiered plan): SSA/CDC life tables + American Housing Survey
    tenure data (step 3), checking what county GIS/assessor portals expose
    before deciding on ZTRAX (step 4), and the two structural SCF findings
@@ -218,5 +233,5 @@ Roughly in priority order:
 - `results/` — raw CSVs and JSON summaries from every comparison run.
 - `config/baseline_params.yaml` — every parameter, with provenance comments
   added anywhere this session touched a value.
-- `tests/` — 89 tests, including regression tests for the price-formation
+- `tests/` — 108 tests, including regression tests for the price-formation
   fix and the investor-propensity wiring.
