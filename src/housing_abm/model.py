@@ -18,7 +18,7 @@ from housing_abm.agents.repeat_buyer import RepeatBuyer
 from housing_abm.agents.small_landlord import SmallLandlord
 from housing_abm.agents.institutional_investor import InstitutionalInvestor
 from housing_abm.external_data import load_g_series, load_monthly_growth_series
-from housing_abm.equations.investor_propensity import sample_landlord_incomes
+from housing_abm.equations.investor_propensity import landlord_selection_weight
 from housing_abm.markets.ownership_market import (
     generate_placeholder_sale_stock,
     run_ownership_market,
@@ -246,67 +246,76 @@ class AtlantaHousingModel(Model):
                 "homeownership_rate": lambda m: m._homeownership_rate(),
             }
         )
-        # create initial renter population
-        # TODO: replace placeholder income with real calibrated
-        n_households = n_households or self.params.get("n_households", 100)
+        # Create initial household population.
+        # SmallLandlords are selected FROM the N households (weighted by the
+        # SCF income-decile propensity curve), not appended on top. This
+        # matches the reference Java model's BTL gene mechanism and keeps
+        # the household count at exactly N for construction targeting.
+        n_households = n_households or self.params.get("simulation", {}).get(
+            "n_households", 100
+        )
         demo_cfg = self.params["demographics"]
         entry_lo, entry_hi = demo_cfg["new_household_age_range"]
-        # ages drawn from the steady-state distribution implied by the mortality
-        # hazard, so the run starts at demographic equilibrium instead of
-        # spending its whole length working through a cohort transient
         initial_ages = sample_stationary_ages(
             self.random_gen, n_households, demo_cfg["mortality"], entry_lo, entry_hi
         )
         income_cfg = self.params.get("income_distribution", {})
-        for age in initial_ages:
-            income = float(
-                self.random_gen.lognormal(
-                    mean=income_cfg.get("household_lognormal_mean", 8.6),
-                    sigma=income_cfg.get("household_lognormal_sigma", 0.65),
-                )
-            )
-            Renter(
-                model=self, income=income, age=int(age), tract_id="tract_001"
-            )  # default initialization
-
-        # create small landlord and institutional investor populations
-        n_small_landlords = round(
-            n_households
-            * self.params.get("simulation", {}).get("small_landlord_fraction", 0.0)
-        )
         propensity_cfg = self.params.get("investor_propensity_eq", {})
-        landlord_incomes = sample_landlord_incomes(
-            self.random_gen,
-            n_landlords=n_small_landlords,
-            pool_size=n_households,
-            decile_probs=propensity_cfg.get(
-                "small_landlord_income_decile_probs", [0.1] * 10
-            ),
-            income_lognormal_mean=income_cfg.get("household_lognormal_mean", 8.6),
-            income_lognormal_sigma=income_cfg.get("household_lognormal_sigma", 0.65),
-        )
-        for income in landlord_incomes:
-            age = int(self.random_gen.integers(30, 70))
-            landlord = SmallLandlord(
-                model=self, income=float(income), age=age, tract_id="tract_001"
-            )
-            landlord.bank_balance = float(
-                self.random_gen.lognormal(mean=11.5, sigma=0.6)
-            )  # starting cash for down payments
+        sim_cfg = self.params.get("simulation", {})
 
+        all_incomes = self.random_gen.lognormal(
+            mean=income_cfg.get("household_lognormal_mean", 8.6),
+            sigma=income_cfg.get("household_lognormal_sigma", 0.65),
+            size=n_households,
+        )
+
+        n_small_landlords = round(
+            n_households * sim_cfg.get("small_landlord_fraction", 0.0)
+        )
+        decile_probs = propensity_cfg.get(
+            "small_landlord_income_decile_probs", [0.1] * 10
+        )
+        weights = np.array([
+            landlord_selection_weight(
+                inc, decile_probs,
+                income_cfg.get("household_lognormal_mean", 8.6),
+                income_cfg.get("household_lognormal_sigma", 0.65),
+            )
+            for inc in all_incomes
+        ])
+        landlord_indices = set()
+        if n_small_landlords > 0 and weights.sum() > 0:
+            weights_norm = weights / weights.sum()
+            landlord_indices = set(self.random_gen.choice(
+                n_households, size=n_small_landlords, replace=False, p=weights_norm,
+            ))
+
+        for i, (age, income) in enumerate(zip(initial_ages, all_incomes)):
+            if i in landlord_indices:
+                landlord = SmallLandlord(
+                    model=self, income=float(income), age=int(age),
+                    tract_id="tract_001",
+                )
+                landlord.bank_balance = float(
+                    self.random_gen.lognormal(mean=11.5, sigma=0.6)
+                )
+            else:
+                Renter(
+                    model=self, income=float(income), age=int(age),
+                    tract_id="tract_001",
+                )
+
+        # InstitutionalInvestors are corporate entities, separate from the
+        # household population and excluded from construction targeting.
         n_institutional_investors = round(
-            n_households
-            * self.params.get("simulation", {}).get(
-                "institutional_investor_fraction", 0.0
-            )
+            n_households * sim_cfg.get("institutional_investor_fraction", 0.0)
         )
-
         for _ in range(n_institutional_investors):
             available_capital = float(
                 self.random_gen.lognormal(mean=13.0, sigma=0.5)
-            )  # much larger capital pools
+            )
             InstitutionalInvestor(
-                model=self, available_capital=available_capital, tract_id="tract_001"
+                model=self, available_capital=available_capital, tract_id="tract_001",
             )
 
         

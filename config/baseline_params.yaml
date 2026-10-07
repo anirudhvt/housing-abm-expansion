@@ -1,7 +1,7 @@
 #placeholder parameters for initial test - run_calibration to see actual
 
 simulation:
-  n_households: 300
+  n_households: 600
   # Landlord/investor counts are set so the initial rental stock lands on two
   # calibration targets at once:
   #   - institutional investors hold ~30% of the single-family rental stock

@@ -124,7 +124,7 @@ def _one(job):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--households", type=int, default=300)
+    parser.add_argument("--households", type=int, default=600)
     parser.add_argument("--spinup", type=int, default=120)
     parser.add_argument("--months", type=int, default=180)
     parser.add_argument("--seeds", type=int, default=12)

@@ -43,6 +43,30 @@ def landlord_selection_weight(
     return decile_probs[idx]
 
 
+def landlord_birth_probability(
+    income: float,
+    target_fraction: float,
+    decile_probs: list[float],
+    income_lognormal_mean: float,
+    income_lognormal_sigma: float,
+) -> float:
+    """Probability that a newborn household with this income gets the
+    SmallLandlord gene, calibrated so the population-level fraction
+    matches target_fraction in expectation.
+
+    Uses the same SCF curve as the init-time weighted selection, scaled
+    by target_fraction / mean(decile_probs) so the integral over the
+    income distribution equals the target.
+    """
+    raw_weight = landlord_selection_weight(
+        income, decile_probs, income_lognormal_mean, income_lognormal_sigma
+    )
+    mean_weight = sum(decile_probs) / len(decile_probs)
+    if mean_weight <= 0:
+        return 0.0
+    return min(target_fraction / mean_weight * raw_weight, 1.0)
+
+
 def sample_landlord_incomes(
     rng: np.random.Generator,
     n_landlords: int,

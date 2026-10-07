@@ -6,6 +6,7 @@ from housing_abm.agents.renter import Renter
 from housing_abm.agents.first_time_buyer import FirstTimeBuyer
 from housing_abm.agents.repeat_buyer import RepeatBuyer
 from housing_abm.agents.small_landlord import SmallLandlord
+from housing_abm.equations.investor_propensity import landlord_birth_probability
 
 # don't include investor, modeleded as a fund/firm, not a mortal household - doesn't die
 HOUSEHOLD_TYPES = (Renter, FirstTimeBuyer, RepeatBuyer, SmallLandlord)
@@ -100,16 +101,31 @@ def process_aging_and_births(model):
     model.households_displaced_pending = 0
 
     age_lo, age_hi = cfg["new_household_age_range"]
+    income_cfg = model.params.get("income_distribution", {})
+    propensity_cfg = model.params.get("investor_propensity_eq", {})
+    sim_cfg = model.params.get("simulation", {})
+    target_fraction = sim_cfg.get("small_landlord_fraction", 0.0)
+    decile_probs = propensity_cfg.get(
+        "small_landlord_income_decile_probs", [0.1] * 10
+    )
+    mu = income_cfg.get("household_lognormal_mean", 8.6)
+    sigma = income_cfg.get("household_lognormal_sigma", 0.65)
+
     for _ in range(n_births + n_replacements):
         age = int(model.rng_demography.integers(age_lo, age_hi))
-        income_cfg = model.params.get("income_distribution", {})
-        income = float(
-            model.rng_demography.lognormal(
-                mean=income_cfg.get("household_lognormal_mean", 8.6),
-                sigma=income_cfg.get("household_lognormal_sigma", 0.65),
-            )
+        income = float(model.rng_demography.lognormal(mean=mu, sigma=sigma))
+        p_landlord = landlord_birth_probability(
+            income, target_fraction, decile_probs, mu, sigma,
         )
-        Renter(model=model, income=income, age=age, tract_id="tract_001")
+        if model.rng_demography.random() < p_landlord:
+            landlord = SmallLandlord(
+                model=model, income=income, age=age, tract_id="tract_001",
+            )
+            landlord.bank_balance = float(
+                model.rng_demography.lognormal(mean=11.5, sigma=0.6)
+            )
+        else:
+            Renter(model=model, income=income, age=age, tract_id="tract_001")
 
 
 def process_deaths(model):
